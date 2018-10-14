@@ -136,16 +136,17 @@ async def montecarloSearch(ps, limit=100,
         #this is where we will try to match game's state to a given state
         await asyncio.gather(
                 montecarloPlayerImpl(game.p1Queue, game.cmdQueue,
-                    ">p1", probTable1),
+                    ">p1", probTable1, errorPunishment=limit),
                 montecarloPlayerImpl(game.p2Queue, game.cmdQueue,
-                    ">p2", probTable2))
+                    ">p2", probTable2, errorPunishment=limit))
     return (probTable1, probTable2)
 
 #runs through a monte carlo playout for a single player
 #so two of these need to be running for a 2 player game
 #probTable maps (state, action) to (win, count)
 #uct_c is the c constant used in the UCT calculation
-async def montecarloPlayerImpl(requestQueue, cmdQueue, cmdHeader, probTable, uct_c=1.414):
+async def montecarloPlayerImpl(requestQueue, cmdQueue, cmdHeader, probTable,
+        uct_c=1.414, errorPunishment=100):
     #types of request
     TEAM = 1
     TURN = 2
@@ -168,10 +169,10 @@ async def montecarloPlayerImpl(requestQueue, cmdQueue, cmdHeader, probTable, uct
             if request[0] == Game.ERROR:
                 state = prevState
                 requestType = prevRequestType
-                #punish the action that led to an error with 100 losses
+                #punish the action that led to an error with a bunch of losses
                 key = (state, requestType, prevAction)
                 win, count = probTable[key]
-                probTable[key] = win, (count + 100)
+                probTable[key] = win, (count + errorPunishment)
                 #scrub the last action from history
                 history = history[0:-1]
             else:
@@ -243,18 +244,21 @@ async def main():
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE)
 
-    probTable1, probTable2 = await montecarloSearch(ps, limit=100)
+    limit = 1000
+    probTable1, probTable2 = await montecarloSearch(ps, limit=limit)
     print('prob table 1')
     for key in probTable1:
         result = probTable1[key]
-        if(result[1] > 0 and result[1] < 100):
+        #<=0 means the action was never actually picked
+        #>=limit means the action was illegal
+        if(result[1] > 0 and result[1] < limit):
             print(key, '=>', probTable1[key], 100 * result[0] / result[1])
     print('prob table 2')
     for key in probTable2:
         result = probTable2[key]
         #<=0 means the action was never actually picked
-        #>=100 means the action was illegal
-        if(result[1] > 0 and result[1] < 100):
+        #>=limit means the action was illegal
+        if(result[1] > 0 and result[1] < limit):
             print(key, '=>', probTable2[key], 100 * result[0] / result[1])
 
     ps.terminate()
