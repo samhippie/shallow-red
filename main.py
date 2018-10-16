@@ -11,10 +11,14 @@ import copy
 
 
 #1v1 teams in packed format
-teams = [
+testTeams = [
     '|mimikyu|mimikiumz||willowisp,playrough,swordsdance,shadowsneak|Jolly|240,128,96,,,44|||||]|zygardecomplete|groundiumz||thousandarrows,coil,substitute,rockslide|Impish|248,12,248,,,|||||]|volcarona|buginiumz|H|bugbuzz,quiverdance,substitute,overheat|Timid|,,52,224,,232||,0,,,,|||',
 
-    '|naganadel|choicespecs||sludgewave,dracometeor,hiddenpowergrass,fireblast|Timid|56,,,188,64,200||,0,,,,|||]|zygarde|groundiumz|H|coil,substitute,bulldoze,thousandarrows|Impish|252,,220,,,36|||||]|magearna|fairiumz||calmmind,painsplit,irondefense,fleurcannon|Modest|224,,160,,,124||,0,,,,|||'
+    '|naganadel|choicespecs||sludgewave,dracometeor,hiddenpowergrass,fireblast|Timid|56,,,188,64,200||,0,,,,|||]|zygarde|groundiumz|H|coil,substitute,bulldoze,thousandarrows|Impish|252,,220,,,36|||||]|magearna|fairiumz||calmmind,painsplit,irondefense,fleurcannon|Modest|224,,160,,,124||,0,,,,|||',
+
+    '|pyukumuku|psychiumz|H|lightscreen,recover,soak,toxic|Sassy|252,,4,,252,||,0,,,,0|||]|charizardmegax|charizarditex||flamecharge,outrage,flareblitz,swordsdance|Jolly|64,152,40,,,252|||||]|mew|keeberry||taunt,willowisp,roost,amnesia|Timid|252,,36,,,220||,0,,,,|||',
+
+    '|tapulele|psychiumz||psychic,calmmind,reflect,moonblast|Calm|252,,60,,196,||,0,,,,|||]|charizard|charizarditex||willowisp,flamecharge,flareblitz,outrage|Jolly|252,,,,160,96|||||]|pheromosa|fightiniumz||bugbuzz,icebeam,focusblast,lunge|Modest|,,160,188,,160|||||',
 ]
 
 #location of the modified ps executable
@@ -57,9 +61,11 @@ class Game:
     REQUEST_SWITCH = 3
 
 
-    def __init__(self, ps, seed=None, verbose=False):
+    def __init__(self, ps, teams, seed=None, verbose=False):
         #the pokemon showdown process
         self.ps = ps
+        #a list of the two teams
+        self.teams = teams
         #the hash of the current game state
         self.state = 0
         #send commands here to be sent to the process
@@ -86,8 +92,8 @@ class Game:
         #commands to get the battle going
         initCommands = [
             '>start {"formatid":"gen71v1"' + (',"seed":' + str(self.seed) if self.seed else '') + '}',
-            '>player p1 {"name":"bot1", "team":"' + teams[0] + '"}',
-            '>player p2 {"name":"bot2", "team":"' + teams[1] + '"}',
+            '>player p1 {"name":"bot1", "team":"' + self.teams[0] + '"}',
+            '>player p2 {"name":"bot2", "team":"' + self.teams[1] + '"}',
         ]
 
         for cmd in initCommands:
@@ -197,14 +203,14 @@ class Game:
 
 #returns None if it failed to achieve the start state
 #otherwise returns two prob tables
-async def montecarloSearch(ps, limit=100,
+async def montecarloSearch(ps, teams, limit=100,
         seed=None, p1InitActions=[], p2InitActions=[],
         probTable1=collections.defaultdict(lambda: (0,0)),
         probTable2=collections.defaultdict(lambda: (0,0))):
     print(end='', file=sys.stderr)
     for i in range(limit):
         print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
-        game = Game(ps, seed=seed, verbose=False)
+        game = Game(ps, teams, seed=seed, verbose=False)
         await game.startGame()
         await asyncio.gather(
                 montecarloPlayerImpl(game.p1Queue, game.cmdQueue,
@@ -336,7 +342,8 @@ async def playTestGame(limit=100):
             random.random() * 0x10000,
         ]
 
-        game = Game(mainPs, seed=seed, verbose=True)
+        teams = (testTeams[2], testTeams[3])
+        game = Game(mainPs, teams=teams, seed=seed, verbose=True)
 
         await game.startGame()
 
@@ -356,6 +363,7 @@ async def playTestGame(limit=100):
                 print('starting turn', i, file=sys.stderr)
                 #advance both prob tables
                 await montecarloSearch(searchPs,
+                        teams,
                         limit=limit,
                         seed=seed,
                         p1InitActions=p1Actions,
@@ -405,7 +413,7 @@ async def playRandomGame():
     ps = await getPSProcess()
     try:
         random.seed(0)
-        game = Game(ps, seed=[0,0,0,0], verbose=True)
+        game = Game(ps, testTeams, seed=[0,0,0,0], verbose=True)
 
         async def randomAgent(queue, cmdHeader):
             lastRequest = None
@@ -441,7 +449,7 @@ async def getPSProcess():
             stdout=subprocess.PIPE)
 
 async def main():
-    await playTestGame(limit=100)
+    await playTestGame(limit=1000)
     #await playRandomGame()
 
 if __name__ == '__main__':
