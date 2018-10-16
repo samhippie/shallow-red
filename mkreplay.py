@@ -3,21 +3,22 @@
 import sys
 
 def main():
-    if len(sys.argv) < 3:
-        print("USAGE: ./mkreplay input.txt output.html")
+    if len(sys.argv) < 1:
+        print("USAGE: ./mkreplay input1 input2 ...")
         return
 
-    inputName = sys.argv[1]
-    outputName = sys.argv[2]
+    for i in range(1, len(sys.argv)):
+        inputName = sys.argv[i]
+        outputName = inputName + '.replay.html'
 
-    with open(inputName, 'r') as infile:
-        lines = infile.readlines()
+        with open(inputName, 'r') as infile:
+            lines = infile.readlines()
 
-    with open(outputName, 'w') as outfile:
-        outfile.write(header)
-        for line in lines:
-            outfile.write(line)
-        outfile.write(footer)
+        with open(outputName, 'w') as outfile:
+            outfile.write(header)
+            for line in lines:
+                outfile.write(line)
+            outfile.write(footer)
 
 
 

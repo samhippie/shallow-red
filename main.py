@@ -61,7 +61,7 @@ class Game:
     REQUEST_SWITCH = 3
 
 
-    def __init__(self, ps, teams, seed=None, verbose=False):
+    def __init__(self, ps, teams, seed=None, verbose=False, file=sys.stdout):
         #the pokemon showdown process
         self.ps = ps
         #a list of the two teams
@@ -79,6 +79,8 @@ class Game:
         self.winner = loop.create_future()
         #whether to print out PS's output
         self.verbose=verbose
+        #where we print to
+        self.file = file
         #the task of reading PS's output, which might need to be cancelled
         #if the game ends early
         self.inputTask = None
@@ -134,7 +136,7 @@ class Game:
                 skipLine = 4
 
             if self.verbose and skipLine <= 0:
-                print(line, end='')
+                print(line, end='', file=self.file)
 
             if skipLine > 0:
                 skipLine -= 1
@@ -330,7 +332,7 @@ async def montecarloPlayerImpl(requestQueue, cmdQueue, cmdHeader, probTable,
 
             running = False
 
-async def playTestGame(limit=100):
+async def playTestGame(limit=100, file=sys.stdout):
     try:
         mainPs = await getPSProcess()
         searchPs = await getPSProcess()
@@ -343,7 +345,7 @@ async def playTestGame(limit=100):
         ]
 
         teams = (testTeams[2], testTeams[3])
-        game = Game(mainPs, teams=teams, seed=seed, verbose=True)
+        game = Game(mainPs, teams=teams, seed=seed, verbose=True, file=file)
 
         await game.startGame()
 
@@ -386,18 +388,22 @@ async def playTestGame(limit=100):
                         actions = teamSet
                     elif request[1][1] == Game.REQUEST_TURN:
                         actions = moveSet
-                    #get the probability of each action winning, adjusted by temp
-                    probs = np.array([(win / (max(count, 1))) ** (1 / temp) for win,count in [probTable[(request[1], action)] for action in actions]])
-                    probSum = np.sum(probs)
-                    probs = probs / probSum
+                    #get the probability of each action winning
+                    probs = [win / (max(count, 1)) for win,count in [probTable[(request[1], action)] for action in actions]]
+                    #apply temperature parameter to make the agent greedier
+                    probsTemp = np.array([p ** (1 / temp) for p in probs])
+                    #make it sum to 1 so np likes it
+                    probSum = np.sum(probsTemp)
+                    normProbs = probsTemp / probSum
                     if probSum == 0:
-                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' seems impossible to win')
+                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' seems impossible to win', file=file)
                     else:
                         for j in range(len(actions)):
                             if probs[j] > 0:
-                                print('|c|' + cmdHeader + '|Turn ' + str(j) + ' action:', actions[j], 'prob:', probs[j])
+                                print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actions[j],
+                                        'prob:', normProbs[j], 'win percentage:', probs[j] * 100, '%', file=file)
                     #pick according to the probability (or should we be 100% greedy?)
-                    action = np.random.choice(actions, p=probs)
+                    action = np.random.choice(actions, p=normProbs)
                     actionList.append(action)
                     await game.cmdQueue.put(cmdHeader + action)
 
@@ -455,7 +461,13 @@ async def getPSProcess():
             stdout=subprocess.PIPE)
 
 async def main():
-    await playTestGame(limit=10000)
+    i = 0
+    while True:
+        limit = 100 * 2 ** i
+        print('starting game with limit', limit, file=sys.stderr)
+        with open('iterout' + str(limit) + '.txt', 'w') as file:
+            await playTestGame(limit=limit, file=file)
+        i += 1
     #await playRandomGame()
 
 if __name__ == '__main__':
