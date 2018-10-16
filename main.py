@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 
+import sys
 import subprocess
 import asyncio
 import random
 import collections
 import math
+import numpy as np
+import copy
 
 
 #1v1 teams in packed format
@@ -23,7 +26,7 @@ PS_ARG = 'simulate-battle'
 moveSet = []
 #no switching in 1v1
 for i in range(4):
-    for extra in ['', ' mega', 'zmove']:
+    for extra in ['', ' mega', ' zmove']:
         moveSet.append(' move ' + str(i+1) + extra)
 
 #hard coded team preview combinations
@@ -41,19 +44,38 @@ for i in range(3):
 class Game:
 
     #types of messages to player
-    #REQUEST has format (REQUEST, state, message)
+    #REQUEST has format (REQUEST, state, request type)
     REQUEST = 1
     #ERROR always refers to the previous message, has format (ERROR,)
     ERROR = 2
     #END has format (END, reward), reward is 1 for win, -1 for loss
     END = 3
 
-    def __init__(self, ps):
+    #request types
+    REQUEST_TEAM = 1
+    REQUEST_TURN = 2
+    REQUEST_SWITCH = 3
+
+
+    def __init__(self, ps, seed=None, verbose=False):
+        #the pokemon showdown process
         self.ps = ps
+        #the hash of the current game state
         self.state = 0
+        #send commands here to be sent to the process
         self.cmdQueue = asyncio.Queue()
+        #read from these to get requests for actions
         self.p1Queue = asyncio.Queue()
         self.p2Queue = asyncio.Queue()
+        self.seed = seed
+        #will have a string value of the winner when the game is over
+        loop = asyncio.get_event_loop()
+        self.winner = loop.create_future()
+        #whether to print out PS's output
+        self.verbose=verbose
+        #the task of reading PS's output, which might need to be cancelled
+        #if the game ends early
+        self.inputTask = None
 
     #starts game in background
     async def startGame(self):
@@ -63,7 +85,7 @@ class Game:
     async def playGame(self):
         #commands to get the battle going
         initCommands = [
-            '>start {"formatid":"gen71v1"}',
+            '>start {"formatid":"gen71v1"' + (',"seed":' + str(self.seed) if self.seed else '') + '}',
             '>player p1 {"name":"bot1", "team":"' + teams[0] + '"}',
             '>player p2 {"name":"bot2", "team":"' + teams[1] + '"}',
         ]
@@ -79,15 +101,37 @@ class Game:
         while running:
             cmd = await self.cmdQueue.get()
             if cmd == 'reset':
+                self.inputTask.cancel()
                 running = False
-            self.ps.stdin.write(bytes(cmd + '\n', 'UTF-8'))
+            else:
+                self.ps.stdin.write(bytes(cmd + '\n', 'UTF-8'))
 
     #reads input and queues player requests
     async def inputLoop(self):
         curQueue = None
         running = True
+        skipLine = False
+        loop = asyncio.get_event_loop()
         while running:
-            line = (await self.ps.stdout.readline()).decode('UTF-8')
+            self.inputTask = loop.create_task(self.ps.stdout.readline())
+            try:
+                line = (await self.inputTask).decode('UTF-8')
+            except:
+                #input got cancelled
+                break
+
+            #we skip lines that are duplicated and mess up the replay
+            if line == '|split\n':
+                #skips the |split line
+                #the next line will be repeated 4 times, only show
+                #the last, which is more detailed
+                skipLine = 4
+
+            if self.verbose and skipLine <= 0:
+                print(line, end='')
+
+            if skipLine > 0:
+                skipLine -= 1
 
             #sets the recipient for the next request
             if line == 'p1\n':
@@ -102,7 +146,8 @@ class Game:
             #sends the request to the current recipient
             elif line.startswith('|request'):
                 message = line[9:]
-                await curQueue.put((Game.REQUEST, self.state, message))
+                requestType = self.getRequestType(message)
+                await curQueue.put((Game.REQUEST, (self.state, requestType)))
 
             #tells the current recipient their last response was rejected
             elif line.startswith('|error'):
@@ -121,37 +166,64 @@ class Game:
 
                 await self.cmdQueue.put('reset')
                 running = False
+                self.winner.set_result(winner)
+
+            #a tie, which usually happens when the game ended early with >forcetie
+            #can't just look for '|tie' as '|tier' is a common message
+            elif line.startswith('|tie\n'):
+                winner = 'the cat'
+
+                await self.p1Queue.put((Game.END, 0))
+                await self.p2Queue.put((Game.END, 0))
+
+                await self.cmdQueue.put('reset')
+                running = False
+                self.winner.set_result(winner)
+
+    def getRequestType(self, message):
+        if message[0:14] == '{"teamPreview"':
+            return Game.REQUEST_TEAM
+        else:
+            return Game.REQUEST_TURN
+        #need to add switch and nothing
+
 
 #generates prob table, which can be used as a policy for playing
 #ps must not have a game running
+#the start states and request types are used to set the game state
+#we will try to get to the proper state
 #(this will change later when we play past team preview)
 #has 2 prob tables as we have 2 separate agents
+
+#returns None if it failed to achieve the start state
+#otherwise returns two prob tables
 async def montecarloSearch(ps, limit=100,
+        seed=None, p1InitActions=[], p2InitActions=[],
         probTable1=collections.defaultdict(lambda: (0,0)),
         probTable2=collections.defaultdict(lambda: (0,0))):
+    print(end='', file=sys.stderr)
     for i in range(limit):
-        game = Game(ps)
+        print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
+        game = Game(ps, seed=seed, verbose=False)
         await game.startGame()
-        #TODO
-        #this is where we will try to match game's state to a given state
         await asyncio.gather(
                 montecarloPlayerImpl(game.p1Queue, game.cmdQueue,
-                    ">p1", probTable1, errorPunishment=limit),
+                    ">p1", probTable1, errorPunishment=2*limit,
+                    initActions=p1InitActions),
                 montecarloPlayerImpl(game.p2Queue, game.cmdQueue,
-                    ">p2", probTable2, errorPunishment=limit))
+                    ">p2", probTable2, errorPunishment=2*limit,
+                    initActions=p2InitActions))
+    print(file=sys.stderr)
     return (probTable1, probTable2)
 
 #runs through a monte carlo playout for a single player
 #so two of these need to be running for a 2 player game
 #probTable maps (state, action) to (win, count)
 #uct_c is the c constant used in the UCT calculation
+#errorPunishment is how many losses an error counts as
+#initActions is a list of initial actions that will be blindy taken
 async def montecarloPlayerImpl(requestQueue, cmdQueue, cmdHeader, probTable,
-        uct_c=1.414, errorPunishment=100):
-    #types of request
-    TEAM = 1
-    TURN = 2
-    SWITCH = 3
-
+        uct_c=1.414, errorPunishment=100, initActions=[]):
     #need to track these so we can correct errors
     prevState = None
     prevRequestType = None
@@ -160,35 +232,45 @@ async def montecarloPlayerImpl(requestQueue, cmdQueue, cmdHeader, probTable,
     #history so we can update probTable
     history = []
 
+    #we're going to be popping off this
+    initActions = copy.deepcopy(initActions)
+
     running = True
     randomPlayout = False
+    inInitActions = True
     while running:
         request = await requestQueue.get()
 
         if request[0] == Game.REQUEST or request[0] == Game.ERROR:
             if request[0] == Game.ERROR:
+                if len(initActions) > 0:
+                    print('WARNING got an error following initActions', file=sys.stderr)
                 state = prevState
-                requestType = prevRequestType
                 #punish the action that led to an error with a bunch of losses
-                key = (state, requestType, prevAction)
+                key = (prevState, prevAction)
                 win, count = probTable[key]
                 probTable[key] = win, (count + errorPunishment)
                 #scrub the last action from history
                 history = history[0:-1]
             else:
                 state = request[1]
-                message = request[2]
-                if message[0:14] == '{"teamPreview"':
-                    requestType = TEAM
-                else:
-                    requestType = TURN
 
-            if requestType == TEAM:
+            if state[1] == Game.REQUEST_TEAM:
                 actions = teamSet
-            elif requestType == TURN:
+            elif state[1] == Game.REQUEST_TURN:
                 actions = moveSet# + switchSet
 
-            if randomPlayout:
+            #check if we ran out of initActions on the previous turn
+            #if so, we need to change the PRNG
+            if inInitActions and len(initActions) == 0:
+                inInitActions = False
+                #no problem if both players reset the PRNG
+                await cmdQueue.put('>resetPRNG')
+
+            if len(initActions) > 0:
+                bestAction = initActions[0]
+                initActions = initActions[1:]
+            elif randomPlayout:
                 bestAction = random.choice(actions)
             else:
                 #use upper confidence bound to pick the action
@@ -199,14 +281,14 @@ async def montecarloPlayerImpl(requestQueue, cmdQueue, cmdHeader, probTable,
 
                 #need to get the total visit count first
                 for action in actions:
-                    key = (state, requestType, action)
+                    key = (state, action)
                     win, count = probTable[key]
                     total += count
 
                 #now we find the best UCT
                 bestUct = None
                 for action in actions:
-                    key = (state, requestType, action)
+                    key = (state, action)
                     win, count = probTable[key]
                     #never visited -> infinite UCT
                     #also means we start the random playout
@@ -220,10 +302,10 @@ async def montecarloPlayerImpl(requestQueue, cmdQueue, cmdHeader, probTable,
                         bestAction = action
 
             #save our action
-            history.append((state, requestType, bestAction))
+            history.append((state, bestAction))
+
             prevAction = bestAction
             prevState = state
-            prevRequestType = requestType
             #send out the action
             await cmdQueue.put(cmdHeader + bestAction)
 
@@ -236,33 +318,131 @@ async def montecarloPlayerImpl(requestQueue, cmdQueue, cmdHeader, probTable,
                     probTable[key] = (win, count+1)
                 elif reward == 1:
                     probTable[key] = (win+1, count+1)
+                elif reward == 0: # we shouldn't be seeing any ties in the MCTS loop, as I don't think you can get ties without a timer
+                    print('WARNING tie in MCTS', file=sys.stderr)
+                    probTable[key] = (win+0.5, count+1)
 
             running = False
 
-async def main():
-    ps = await asyncio.create_subprocess_exec(PS_PATH, PS_ARG,
+async def playTestGame(limit=100):
+    try:
+        mainPs = await getPSProcess()
+        searchPs = await getPSProcess()
+
+        seed = [
+            random.random() * 0x10000,
+            random.random() * 0x10000,
+            random.random() * 0x10000,
+            random.random() * 0x10000,
+        ]
+
+        game = Game(mainPs, seed=seed, verbose=True)
+
+        await game.startGame()
+
+        probTable1 = collections.defaultdict(lambda: (0,0))
+        probTable2 = collections.defaultdict(lambda: (0,0))
+
+
+        #this needs to be a coroutine so we can cancel it when the game ends
+        #which due to concurrency issues might not be until we get into the MCTS loop
+        async def play():
+            i = 0
+            #actions taken so far by in the actual game
+            p1Actions = []
+            p2Actions = []
+            while True:
+                i += 1
+                print('starting turn', i, file=sys.stderr)
+                #advance both prob tables
+                await montecarloSearch(searchPs,
+                        limit=limit,
+                        seed=seed,
+                        p1InitActions=p1Actions,
+                        p2InitActions=p2Actions,
+                        probTable1=probTable1,
+                        probTable2=probTable2)
+
+                #this assumes that both player1 and player2 get requests each turn
+                #which I think is accurate, but most formats will give one player a waiting request
+                #except for errors
+
+                async def playTurn(queue, probTable, actionList, cmdHeader):
+                    #figure out what kind of action we need
+                    request = await queue.get()
+                    if request[1][1] == Game.REQUEST_TEAM:
+                        actions = teamSet
+                    elif request[1][1] == Game.REQUEST_TURN:
+                        actions = moveSet
+                    #get the probability of each action winning
+                    probs = [win / (max(count, 1)) for win,count in [probTable[(request[1], action)] for action in actions]]
+                    probSum = np.sum(probs)
+                    if probSum == 0:
+                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' seems impossible to win')
+                    for i in range(len(actions)):
+                        if probs[i] > 0:
+                            print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actions[i], 'prob:', probs[i])
+                    #pick according to the probability (or should we be 100% greedy?)
+                    action = np.random.choice(actions, p=probs / probSum)
+                    actionList.append(action)
+                    await game.cmdQueue.put(cmdHeader + action)
+
+                await playTurn(game.p1Queue, probTable1, p1Actions, '>p1')
+                await playTurn(game.p2Queue, probTable2, p2Actions, '>p2')
+
+        #gameTask = play()
+        #asyncio.ensure_future(gameTask)
+        gameTask = asyncio.ensure_future(play())
+        winner = await game.winner
+        gameTask.cancel()
+        print('winner:', winner, file=sys.stderr)
+
+    finally:
+        mainPs.terminate()
+        searchPs.terminate()
+
+async def playRandomGame():
+    ps = await getPSProcess()
+    try:
+        random.seed(0)
+        game = Game(ps, seed=[0,0,0,0], verbose=True)
+
+        async def randomAgent(queue, cmdHeader):
+            lastRequest = None
+            while True:
+                req = await queue.get()
+                print(cmdHeader, queue)
+                if req[0] == Game.END:
+                    break
+                elif req[0] == Game.ERROR:
+                    req = lastRequest
+                lastRequest = req
+
+                if req[1][1] == Game.REQUEST_TEAM:
+                    actions = teamSet
+                elif req[1][1] == Game.REQUEST_TURN:
+                    actions = moveSet
+
+                action = random.choice(actions)
+                await game.cmdQueue.put(cmdHeader + action)
+
+        await game.startGame()
+        await asyncio.gather(randomAgent(game.p1Queue, '>p1'),
+                randomAgent(game.p2Queue, '>p2'))
+
+        winner = await game.winner
+        print('winner:', winner)
+    finally:
+        ps.terminate()
+
+async def getPSProcess():
+    return await asyncio.create_subprocess_exec(PS_PATH, PS_ARG,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE)
 
-    limit = 1000
-    probTable1, probTable2 = await montecarloSearch(ps, limit=limit)
-    print('prob table 1')
-    for key in probTable1:
-        result = probTable1[key]
-        #<=0 means the action was never actually picked
-        #>=limit means the action was illegal
-        if(result[1] > 0 and result[1] < limit):
-            print(key, '=>', probTable1[key], 100 * result[0] / result[1])
-    print('prob table 2')
-    for key in probTable2:
-        result = probTable2[key]
-        #<=0 means the action was never actually picked
-        #>=limit means the action was illegal
-        if(result[1] > 0 and result[1] < limit):
-            print(key, '=>', probTable2[key], 100 * result[0] / result[1])
-
-    ps.terminate()
-
+async def main():
+    await playTestGame(limit=100)
+    #await playRandomGame()
 
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
