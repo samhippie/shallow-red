@@ -12,11 +12,11 @@ import copy
 
 #1v1 teams in packed format
 testTeams = [
-    '|mimikyu|mimikiumz||willowisp,playrough,swordsdance,shadowsneak|Jolly|240,128,96,,,44|||||]|zygardecomplete|groundiumz||thousandarrows,coil,substitute,rockslide|Impish|248,12,248,,,|||||]|volcarona|buginiumz|H|bugbuzz,quiverdance,substitute,overheat|Timid|,,52,224,,232||,0,,,,|||',
+    '|mimikyu|mimikiumz||willowisp,playrough,swordsdance,shadowsneak|Jolly|240,128,96,,,44|||||]|zygarde|groundiumz||thousandarrows,coil,substitute,rockslide|Impish|248,12,248,,,|||||]|volcarona|buginiumz|H|bugbuzz,quiverdance,substitute,overheat|Timid|,,52,224,,232||,0,,,,|||',
 
     '|naganadel|choicespecs||sludgewave,dracometeor,hiddenpowergrass,fireblast|Timid|56,,,188,64,200||,0,,,,|||]|zygarde|groundiumz|H|coil,substitute,bulldoze,thousandarrows|Impish|252,,220,,,36|||||]|magearna|fairiumz||calmmind,painsplit,irondefense,fleurcannon|Modest|224,,160,,,124||,0,,,,|||',
 
-    '|pyukumuku|psychiumz|H|lightscreen,recover,soak,toxic|Sassy|252,,4,,252,||,0,,,,0|||]|charizardmegax|charizarditex||flamecharge,outrage,flareblitz,swordsdance|Jolly|64,152,40,,,252|||||]|mew|keeberry||taunt,willowisp,roost,amnesia|Timid|252,,36,,,220||,0,,,,|||',
+    '|pyukumuku|psychiumz|H|lightscreen,recover,soak,toxic|Sassy|252,,4,,252,||,0,,,,0|||]|charizard|charizarditex||flamecharge,outrage,flareblitz,swordsdance|Jolly|64,152,40,,,252|||||]|mew|keeberry||taunt,willowisp,roost,amnesia|Timid|252,,36,,,220||,0,,,,|||',
 
     '|tapulele|psychiumz||psychic,calmmind,reflect,moonblast|Calm|252,,60,,196,||,0,,,,|||]|charizard|charizarditex||willowisp,flamecharge,flareblitz,outrage|Jolly|252,,,,160,96|||||]|pheromosa|fightiniumz||bugbuzz,icebeam,focusblast,lunge|Modest|,,160,188,,160|||||',
 ]
@@ -375,6 +375,10 @@ async def playTestGame(limit=100):
                 #which I think is accurate, but most formats will give one player a waiting request
                 #except for errors
 
+                #temps above 1 are exploitative
+                #temps below 1 are explorative (which isn't what we're looking for)
+                temp=0.1
+
                 async def playTurn(queue, probTable, actionList, cmdHeader):
                     #figure out what kind of action we need
                     request = await queue.get()
@@ -382,16 +386,18 @@ async def playTestGame(limit=100):
                         actions = teamSet
                     elif request[1][1] == Game.REQUEST_TURN:
                         actions = moveSet
-                    #get the probability of each action winning
-                    probs = [win / (max(count, 1)) for win,count in [probTable[(request[1], action)] for action in actions]]
+                    #get the probability of each action winning, adjusted by temp
+                    probs = np.array([(win / (max(count, 1))) ** (1 / temp) for win,count in [probTable[(request[1], action)] for action in actions]])
                     probSum = np.sum(probs)
+                    probs = probs / probSum
                     if probSum == 0:
                         print('|c|' + cmdHeader + '|Turn ' + str(i) + ' seems impossible to win')
-                    for i in range(len(actions)):
-                        if probs[i] > 0:
-                            print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actions[i], 'prob:', probs[i])
+                    else:
+                        for j in range(len(actions)):
+                            if probs[j] > 0:
+                                print('|c|' + cmdHeader + '|Turn ' + str(j) + ' action:', actions[j], 'prob:', probs[j])
                     #pick according to the probability (or should we be 100% greedy?)
-                    action = np.random.choice(actions, p=probs / probSum)
+                    action = np.random.choice(actions, p=probs)
                     actionList.append(action)
                     await game.cmdQueue.put(cmdHeader + action)
 
@@ -449,7 +455,7 @@ async def getPSProcess():
             stdout=subprocess.PIPE)
 
 async def main():
-    await playTestGame(limit=1000)
+    await playTestGame(limit=10000)
     #await playRandomGame()
 
 if __name__ == '__main__':
