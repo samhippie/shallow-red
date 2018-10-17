@@ -79,7 +79,7 @@ async def playTestGame(limit=100, file=sys.stdout):
             random.random() * 0x10000,
         ]
 
-        teams = (testTeams[2], testTeams[3])
+        teams = (testTeams[4], testTeams[4])
         game = Game(mainPs, teams=teams, seed=seed, verbose=True, file=file)
 
         await game.startGame()
@@ -117,9 +117,10 @@ async def playTestGame(limit=100, file=sys.stdout):
                 async def playTurn(queue, myMcData, actionList, cmdHeader):
                     #figure out what kind of action we need
                     request = await queue.get()
-                    if request[1][1] == Game.REQUEST_TEAM:
+                    state = request[1]
+                    if state[1] == Game.REQUEST_TEAM:
                         actions = moves.teamSet
-                    elif request[1][1] == Game.REQUEST_TURN:
+                    elif state[1] == Game.REQUEST_TURN:
                         actions = moves.moveSet
                     """
                     #get the probability of each action winning
@@ -133,15 +134,17 @@ async def playTestGame(limit=100, file=sys.stdout):
                     """
 
 
-                    normProbs = mc.mcGetProbsExp3(myMcData, request[1], actions)
+                    normProbs = mc.getProbsExp3(myMcData, state, actions)
                     probSum = np.sum(normProbs)
+                    expValue = mc.getExpValueExp3(myMcData, state, actions, normProbs)
                     if probSum == 0:
-                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' seems impossible to win', file=file)
+                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' seems impossible to play', file=file)
                     else:
+                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' expected value:', '%.1f%%' % (expValue * 100), file=file)
                         for j in range(len(actions)):
                             if normProbs[j] > 0:
                                 print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actions[j],
-                                        'prob:', normProbs[j] * 100, '%', file=file)
+                                        'prob:', '%.1f%%' % (normProbs[j] * 100), file=file)
 
                     #pick according to the probability (or should we be 100% greedy?)
                     action = np.random.choice(actions, p=normProbs)
@@ -171,7 +174,7 @@ async def getPSProcess():
             stdout=subprocess.PIPE)
 
 async def main():
-    await playTestGame(limit=1000)
+    await playTestGame(limit=100)
     """
     i = 0
     while True:

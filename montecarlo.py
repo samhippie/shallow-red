@@ -285,12 +285,31 @@ async def mcSearchExp3(ps, teams, mcData, limit=100,
     print(file=sys.stderr)
 
 #returns the final probabilities of each action in the state
-def mcGetProbsExp3(mcData, state, actions):
+def getProbsExp3(mcData, state, actions):
     countTable = mcData['countTable']
     counts = [countTable[(state, action)] for action in actions]
+    expValueTable = mcData['expValueTable']
     totalCount = np.sum(counts)
     probs = np.array([max(0, c - mcData['gamma'] * totalCount / len(actions)) for c in counts])
     probs = probs / np.sum(probs)
     return probs
+
+#should return the expected value for the state
+#I'm assuming x * p / c gives the expected value of a move with the given probability
+#and averaging that for all moves gives the expected value for the state
+#I'm not sure about the math but the numbers seem to work out
+def getExpValueExp3(mcData, state, actions, probs):
+    countTable = mcData['countTable']
+    counts = [countTable[(state, action)] for action in actions]
+    expValueTable = mcData['expValueTable']
+    xvs = []
+    for i in range(len(actions)):
+        action = actions[i]
+        if counts[i] == 0:
+            continue
+        xv = expValueTable[(state, action)] * probs[i] / counts[i]
+        if expValueTable[(state, action)] >= 0:#negative values are for illegal moves
+            xvs.append(xv)
+    return np.mean(xvs)
 
 
