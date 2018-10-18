@@ -170,6 +170,7 @@ async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
     countTable = mcData['countTable']
     expValueTable = mcData['expValueTable']
     gamma = mcData['gamma']
+    seenStates = mcData['seenStates']
 
     #need to track these so we can correct errors
     prevState = None
@@ -200,11 +201,8 @@ async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
             else:
                 state = request[1]
 
+            seenStates[state] = True
             actions = moves.getMoves(format, state[1])
-            #if state[1] == Game.REQUEST_TEAM:
-                #actions = moves.getTeamSet(format)
-            #elif state[1] == Game.REQUEST_TURN:
-                #actions = moves.getTeamSet(format)
 
             #check if we ran out of initActions on the previous turn
             #if so, we need to change the PRNG
@@ -259,7 +257,6 @@ async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
             running = False
 
 
-
 #Exp3
 async def mcSearchExp3(ps, format, teams, mcData, limit=100,
         seed=None, p1InitActions=[], p2InitActions=[]):
@@ -269,7 +266,9 @@ async def mcSearchExp3(ps, format, teams, mcData, limit=100,
         if 'expValueTable' not in mcData[i]:
             mcData[i]['expValueTable'] = collections.defaultdict(int)
         if 'gamma' not in mcData[i]:
-            mcData[i]['gamma'] = 0.3
+            mcData[i]['gamma'] = 0.1
+        if 'seenStates' not in mcData[i]:
+            mcData[i]['seenStates'] = {}
 
     print(end='', file=sys.stderr)
     for i in range(limit):
