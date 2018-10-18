@@ -165,7 +165,7 @@ async def mcSearchDUCT(ps, teams, limit=100,
 #both should be defaultdict to 0
 #mcData has gamma, which is a number [0,1], prob of picking random move
 async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
-        errorPunishment=100, initActions=[]):
+        format, errorPunishment=100, initActions=[]):
 
     countTable = mcData['countTable']
     expValueTable = mcData['expValueTable']
@@ -200,10 +200,11 @@ async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
             else:
                 state = request[1]
 
-            if state[1] == Game.REQUEST_TEAM:
-                actions = moves.teamSet
-            elif state[1] == Game.REQUEST_TURN:
-                actions = moves.moveSet# + switchSet
+            actions = moves.getMoves(format, state[1])
+            #if state[1] == Game.REQUEST_TEAM:
+                #actions = moves.getTeamSet(format)
+            #elif state[1] == Game.REQUEST_TURN:
+                #actions = moves.getTeamSet(format)
 
             #check if we ran out of initActions on the previous turn
             #if so, we need to change the PRNG
@@ -260,7 +261,7 @@ async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
 
 
 #Exp3
-async def mcSearchExp3(ps, teams, mcData, limit=100,
+async def mcSearchExp3(ps, format, teams, mcData, limit=100,
         seed=None, p1InitActions=[], p2InitActions=[]):
     for i in range(len(mcData)):
         if 'countTable' not in mcData[i]:
@@ -273,14 +274,14 @@ async def mcSearchExp3(ps, teams, mcData, limit=100,
     print(end='', file=sys.stderr)
     for i in range(limit):
         print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
-        game = Game(ps, teams, seed=seed, verbose=False)
+        game = Game(ps, teams, format=format, seed=seed, verbose=False)
         await game.startGame()
         await asyncio.gather(
                 mcExp3Impl(game.p1Queue, game.cmdQueue,
-                    ">p1", mcData=mcData[0], errorPunishment=2*limit,
+                    ">p1", mcData=mcData[0], format=format, errorPunishment=2*limit,
                     initActions=p1InitActions),
                 mcExp3Impl(game.p2Queue, game.cmdQueue,
-                    ">p2", mcData=mcData[1], errorPunishment=2*limit,
+                    ">p2", mcData=mcData[1], format=format, errorPunishment=2*limit,
                     initActions=p2InitActions))
     print(file=sys.stderr)
 

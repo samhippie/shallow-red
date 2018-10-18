@@ -25,6 +25,14 @@ testTeams = [
     '|charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,||,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,aurasphere|Quiet|252,4,,252,,|||||',
 ]
 
+#please don't use a stall team
+testSinglesTeams = [
+    '|azelf|focussash||stealthrock,taunt,explosion,flamethrower|Jolly|,252,,4,,252|||||]|crawdaunt|focussash|H|swordsdance,knockoff,crabhammer,aquajet|Adamant|,252,,,4,252|||||]|mamoswine|focussash|H|endeavor,earthquake,iceshard,iciclecrash|Jolly|,252,,,4,252|||||]|starmie|electriumz|H|hydropump,thunder,rapidspin,icebeam|Timid|,,,252,4,252||,0,,,,|||]|scizor|ironplate|1|swordsdance,bulletpunch,knockoff,superpower|Adamant|,252,4,,,252|||||]|manectricmega|manectite|lightningrod|voltswitch,flamethrower,signalbeam,hiddenpowergrass|Timid|,,,252,4,252||,0,,,,|||',
+
+    'crossy u lossy|heracross|flameorb|1|closecombat,knockoff,facade,swordsdance|Jolly|,252,,,4,252|||||]chuggy buggy|scizor|choiceband|1|bulletpunch,uturn,superpower,pursuit|Adamant|112,252,,,,144|||||]woofy woof|manectricmega|manectite||thunderbolt,voltswitch,flamethrower,hiddenpowerice|Timid|,,,252,4,252||,0,,,,|||]batzywatzy|crobat|flyiniumz|H|bravebird,defog,roost,uturn|Jolly|,252,,,4,252|||||]soggy froggy|seismitoad|leftovers|H|stealthrock,scald,earthpower,toxic|Bold|244,,252,,,12||,0,,,,|||]bitchy sissy|latias|choicescarf||dracometeor,psychic,trick,healingwish|Timid|,,,252,4,252||,0,,,,|||',
+]
+
+
 #location of the modified ps executable
 PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
 PS_ARG = 'simulate-battle'
@@ -79,8 +87,10 @@ async def playTestGame(limit=100, file=sys.stdout):
             random.random() * 0x10000,
         ]
 
-        teams = (testTeams[4], testTeams[4])
-        game = Game(mainPs, teams=teams, seed=seed, verbose=True, file=file)
+        #teams = (testTeams[4], testTeams[4])
+        teams = (testSinglesTeams[0], testSinglesTeams[1])
+        format = 'singles'
+        game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
         await game.startGame()
 
@@ -99,6 +109,7 @@ async def playTestGame(limit=100, file=sys.stdout):
                 print('starting turn', i, file=sys.stderr)
                 #advance both prob tables
                 await mc.mcSearchExp3(searchPs,
+                        format,
                         teams,
                         limit=limit,
                         seed=seed,
@@ -118,10 +129,15 @@ async def playTestGame(limit=100, file=sys.stdout):
                     #figure out what kind of action we need
                     request = await queue.get()
                     state = request[1]
-                    if state[1] == Game.REQUEST_TEAM:
-                        actions = moves.teamSet
-                    elif state[1] == Game.REQUEST_TURN:
-                        actions = moves.moveSet
+                    actions = moves.getMoves(format, state[1])
+                    #if state[1] == Game.REQUEST_TEAM:
+                        #actions = moves.getTeamSet(format)
+                    #elif state[1] == Game.REQUEST_TURN:
+                        #actions = moves.getMoveSet(format)
+                    #elif state[1] == GAME.REQUEST_SWITCH:
+                        #actions = moves.getSwitchSet(format)
+                    #elif state[1] == GAME.REQUEST_WAIT:
+                        #actions = moves.getWaitSet(format)
                     """
                     #get the probability of each action winning
                     probs = [win / (max(count, 1)) for win,count in [probTable[(request[1], action)] for action in actions]]

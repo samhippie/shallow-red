@@ -23,13 +23,15 @@ class Game:
     REQUEST_TEAM = 1
     REQUEST_TURN = 2
     REQUEST_SWITCH = 3
+    REQUEST_WAIT = 4
 
 
-    def __init__(self, ps, teams, seed=None, verbose=False, file=sys.stdout):
+    def __init__(self, ps, teams, format='1v1', seed=None, verbose=False, file=sys.stdout):
         #the pokemon showdown process
         self.ps = ps
         #a list of the two teams
         self.teams = teams
+        self.format = format
         #the hash of the current game state
         self.state = 0
         #send commands here to be sent to the process
@@ -55,9 +57,16 @@ class Game:
 
     #handles init, starts input loop, handles output
     async def playGame(self):
+        #PS doesn't actually enforce banlists, so as
+        #long as the format is close we should be fine
+        if self.format == 'singles':
+            psFormat = 'anythinggoes'
+        else:
+            psFormat = self.format
+
         #commands to get the battle going
         initCommands = [
-            '>start {"formatid":"gen71v1"' + (',"seed":' + str(self.seed) if self.seed else '') + '}',
+            '>start {"formatid":"gen7' + psFormat + '"' + (',"seed":' + str(self.seed) if self.seed else '') + '}',
             '>player p1 {"name":"bot1", "team":"' + self.teams[0] + '"}',
             '>player p2 {"name":"bot2", "team":"' + self.teams[1] + '"}',
         ]
@@ -75,6 +84,9 @@ class Game:
             if cmd == 'reset':
                 self.inputTask.cancel()
                 running = False
+            elif 'noop' in cmd:
+                #don't need to send anything to do nothing
+                pass
             else:
                 self.ps.stdin.write(bytes(cmd + '\n', 'UTF-8'))
 
@@ -153,10 +165,13 @@ class Game:
                 self.winner.set_result(winner)
 
     def getRequestType(self, message):
-        if message[0:14] == '{"teamPreview"':
+        if message.startswith('{"teamPreview"'):
             return Game.REQUEST_TEAM
+        elif message.startswith('{"forceSwitch"'):
+            return Game.REQUEST_SWITCH
+        elif message.startswith('{"wait"'):
+            return Game.REQUEST_WAIT
         else:
             return Game.REQUEST_TURN
-        #need to add switch and nothing
 
 
