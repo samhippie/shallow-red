@@ -27,9 +27,9 @@ testTeams = [
 
 #please don't use a stall team
 testSinglesTeams = [
-    '|azelf|focussash||stealthrock,taunt,explosion,flamethrower|Jolly|,252,,4,,252|||||]|crawdaunt|focussash|H|swordsdance,knockoff,crabhammer,aquajet|Adamant|,252,,,4,252|||||]|mamoswine|focussash|H|endeavor,earthquake,iceshard,iciclecrash|Jolly|,252,,,4,252|||||]|starmie|electriumz|H|hydropump,thunder,rapidspin,icebeam|Timid|,,,252,4,252||,0,,,,|||]|scizor|ironplate|1|swordsdance,bulletpunch,knockoff,superpower|Adamant|,252,4,,,252|||||]|manectricmega|manectite|lightningrod|voltswitch,flamethrower,signalbeam,hiddenpowergrass|Timid|,,,252,4,252||,0,,,,|||',
+    '|azelf|focussash||stealthrock,taunt,explosion,flamethrower|Jolly|,252,,4,,252|||||]|crawdaunt|focussash|H|swordsdance,knockoff,crabhammer,aquajet|Adamant|,252,,,4,252|||||]|mamoswine|focussash|H|endeavor,earthquake,iceshard,iciclecrash|Jolly|,252,,,4,252|||||]|starmie|electriumz|H|hydropump,thunder,rapidspin,icebeam|Timid|,,,252,4,252||,0,,,,|||]|scizor|ironplate|1|swordsdance,bulletpunch,knockoff,superpower|Adamant|,252,4,,,252|||||]|manectric|manectite|1|voltswitch,flamethrower,signalbeam,hiddenpowergrass|Timid|,,,252,4,252||,0,,,,|||',
 
-    'crossy u lossy|heracross|flameorb|1|closecombat,knockoff,facade,swordsdance|Jolly|,252,,,4,252|||||]chuggy buggy|scizor|choiceband|1|bulletpunch,uturn,superpower,pursuit|Adamant|112,252,,,,144|||||]woofy woof|manectricmega|manectite||thunderbolt,voltswitch,flamethrower,hiddenpowerice|Timid|,,,252,4,252||,0,,,,|||]batzywatzy|crobat|flyiniumz|H|bravebird,defog,roost,uturn|Jolly|,252,,,4,252|||||]soggy froggy|seismitoad|leftovers|H|stealthrock,scald,earthpower,toxic|Bold|244,,252,,,12||,0,,,,|||]bitchy sissy|latias|choicescarf||dracometeor,psychic,trick,healingwish|Timid|,,,252,4,252||,0,,,,|||',
+    'crossy u lossy|heracross|flameorb|1|closecombat,knockoff,facade,swordsdance|Jolly|,252,,,4,252|||||]chuggy buggy|scizor|choiceband|1|bulletpunch,uturn,superpower,pursuit|Adamant|112,252,,,,144|||||]woofy woof|manectric|manectite|1|thunderbolt,voltswitch,flamethrower,hiddenpowerice|Timid|,,,252,4,252||,0,,,,|||]batzywatzy|crobat|flyiniumz|H|bravebird,defog,roost,uturn|Jolly|,252,,,4,252|||||]soggy froggy|seismitoad|leftovers|H|stealthrock,scald,earthpower,toxic|Bold|244,,252,,,12||,0,,,,|||]bitchy sissy|latias|choicescarf||dracometeor,psychic,trick,healingwish|Timid|,,,252,4,252||,0,,,,|||',
 ]
 
 
@@ -75,10 +75,13 @@ async def playRandomGame():
 
 
 
-async def playTestGame(limit=100, file=sys.stdout):
+async def playTestGame(teams, limit=100, format='1v1', file=sys.stdout):
     try:
+        numProcesses = 3
+
         mainPs = await getPSProcess()
-        searchPs = await getPSProcess()
+
+        searchPs = [await getPSProcess() for i in range(numProcesses)]
 
         seed = [
             random.random() * 0x10000,
@@ -87,15 +90,10 @@ async def playTestGame(limit=100, file=sys.stdout):
             random.random() * 0x10000,
         ]
 
-        #teams = (testTeams[4], testTeams[4])
-        teams = (testSinglesTeams[0], testSinglesTeams[1])
-        format = 'singles'
         game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
         await game.startGame()
 
-        #holds the montecarlo data
-        mcData = [{}, {}]
 
         #this needs to be a coroutine so we can cancel it when the game ends
         #which due to concurrency issues might not be until we get into the MCTS loop
@@ -107,71 +105,66 @@ async def playTestGame(limit=100, file=sys.stdout):
             while True:
                 i += 1
                 print('starting turn', i, file=sys.stderr)
+
+
+
+                #holds the montecarlo data
+                #each entry goes to one process
+                #I ran out of RAM keeping this for each turn, so I'm going to restart it each time
+                mcData = [[{}, {}]] * numProcesses
+
+                #I suspect that averaging two runs together will
+                #give us more improvement than running for twice as long
+                #and it should run faster than a single long search due to parallelism
+
                 #advance both prob tables
-                await mc.mcSearchExp3(searchPs,
-                        format,
-                        teams,
-                        limit=limit,
-                        seed=seed,
-                        p1InitActions=p1Actions,
-                        p2InitActions=p2Actions,
-                        mcData=mcData)
+                searches = [ mc.mcSearchExp3(
+                            searchPs[i],
+                            format,
+                            teams,
+                            limit=limit,
+                            seed=seed,
+                            p1InitActions=p1Actions,
+                            p2InitActions=p2Actions,
+                            mcData=mcData[i])
+                            for i in range(numProcesses) ]
+
+                await asyncio.gather(*searches)
 
                 #this assumes that both player1 and player2 get requests each turn
                 #which I think is accurate, but most formats will give one player a waiting request
                 #except for errors
-
-                #temps above 1 are exploitative
-                #temps below 1 are explorative (which isn't what we're looking for)
-                temp=0.1
 
                 async def playTurn(queue, myMcData, actionList, cmdHeader):
                     #figure out what kind of action we need
                     request = await queue.get()
                     state = request[1]
                     actions = moves.getMoves(format, state[1])
-                    #if state[1] == Game.REQUEST_TEAM:
-                        #actions = moves.getTeamSet(format)
-                    #elif state[1] == Game.REQUEST_TURN:
-                        #actions = moves.getMoveSet(format)
-                    #elif state[1] == GAME.REQUEST_SWITCH:
-                        #actions = moves.getSwitchSet(format)
-                    #elif state[1] == GAME.REQUEST_WAIT:
-                        #actions = moves.getWaitSet(format)
-                    """
-                    #get the probability of each action winning
-                    probs = [win / (max(count, 1)) for win,count in [probTable[(request[1], action)] for action in actions]]
-                    #apply temperature parameter to make the agent greedier
-                    #also zero out probs < 0, which are illegal moves
-                    probsTemp = np.array([p ** (1 / temp) if p >= 0 else 0 for p in probs])
-                    #make it sum to 1 so np likes it
-                    probSum = np.sum(probsTemp)
-                    normProbs = probsTemp / probSum
-                    """
 
+                    normProbList = []
+                    expValueList = []
+                    for data in myMcData:
+                        normProbs = mc.getProbsExp3(data, state, actions)
+                        expValue = mc.getExpValueExp3(data, state, actions, normProbs)
+                        normProbList.append(normProbs)
+                        expValueList.append(expValue)
 
-                    normProbs = mc.getProbsExp3(myMcData, state, actions)
+                    expValue = np.mean(expValueList)
+                    normProbs = np.mean(normProbList, axis=0)
                     probSum = np.sum(normProbs)
-                    expValue = mc.getExpValueExp3(myMcData, state, actions, normProbs)
-                    if probSum == 0:
-                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' seems impossible to play', file=file)
-                    else:
-                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' expected value:', '%.1f%%' % (expValue * 100), file=file)
-                        for j in range(len(actions)):
-                            if normProbs[j] > 0:
-                                print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actions[j],
-                                        'prob:', '%.1f%%' % (normProbs[j] * 100), file=file)
+                    print('|c|' + cmdHeader + '|Turn ' + str(i) + ' expected value:', '%.1f%%' % (expValue * 100), file=file)
+                    for j in range(len(actions)):
+                        if normProbs[j] > 0:
+                            print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actions[j],
+                                    'prob:', '%.1f%%' % (normProbs[j] * 100), file=file)
 
-                    #pick according to the probability (or should we be 100% greedy?)
                     action = np.random.choice(actions, p=normProbs)
                     actionList.append(action)
                     await game.cmdQueue.put(cmdHeader + action)
 
-                await playTurn(game.p1Queue, mcData[0], p1Actions, '>p1')
-                await playTurn(game.p2Queue, mcData[1], p2Actions, '>p2')
+                await playTurn(game.p1Queue, [data[0] for data in mcData], p1Actions, '>p1')
+                await playTurn(game.p2Queue, [data[1] for data in mcData], p2Actions, '>p2')
 
-        #gameTask = play()
-        #asyncio.ensure_future(gameTask)
         gameTask = asyncio.ensure_future(play())
         winner = await game.winner
         gameTask.cancel()
@@ -182,7 +175,8 @@ async def playTestGame(limit=100, file=sys.stdout):
 
     finally:
         mainPs.terminate()
-        searchPs.terminate()
+        searchPs1.terminate()
+        searchPs2.terminate()
 
 async def getPSProcess():
     return await asyncio.create_subprocess_exec(PS_PATH, PS_ARG,
@@ -190,7 +184,9 @@ async def getPSProcess():
             stdout=subprocess.PIPE)
 
 async def main():
-    await playTestGame(limit=100)
+    teams = (testSinglesTeams[0], testSinglesTeams[1])
+    #teams = (testTeams[0], testTeams[3])
+    await playTestGame(teams, format='singles', limit=1000)
     """
     i = 0
     while True:
@@ -200,7 +196,6 @@ async def main():
             await playTestGame(limit=limit, file=file)
         i += 1
     """
-    #await playRandomGame()
 
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
