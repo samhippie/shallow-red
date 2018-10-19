@@ -266,7 +266,7 @@ async def mcSearchExp3(ps, format, teams, mcData, limit=100,
         if 'expValueTable' not in mcData[i]:
             mcData[i]['expValueTable'] = collections.defaultdict(int)
         if 'gamma' not in mcData[i]:
-            mcData[i]['gamma'] = 0.1
+            mcData[i]['gamma'] = 0.3
         if 'seenStates' not in mcData[i]:
             mcData[i]['seenStates'] = {}
 

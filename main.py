@@ -76,9 +76,8 @@ async def playRandomGame():
 
 
 
-async def playTestGame(teams, limit=100, format='1v1', file=sys.stdout):
+async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.stdout, initMoves=([],[])):
     try:
-        numProcesses = 3
 
         mainPs = await getPSProcess()
 
@@ -117,87 +116,98 @@ async def playTestGame(teams, limit=100, format='1v1', file=sys.stdout):
                 i += 1
                 print('starting turn', i, file=sys.stderr)
 
-                #I suspect that averaging two runs together will
-                #give us more improvement than running for twice as long
-                #and it should run faster than a single long search due to parallelism
+                #don't search if we aren't going to use the results
+                if len(initMoves[0]) == 0 or len(initMoves[1]) == 0:
+                    #I suspect that averaging two runs together will
+                    #give us more improvement than running for twice as long
+                    #and it should run faster than a single long search due to parallelism
 
-                searches = []
-                for j in range(numProcesses):
-                    search = mc.mcSearchExp3(
-                            searchPs[j],
-                            format,
-                            teams,
-                            limit=limit,
-                            seed=seed,
-                            p1InitActions=p1Actions,
-                            p2InitActions=p2Actions,
-                            mcData=mcDatasets[j])
-                    searches.append(search)
+                    searches = []
+                    for j in range(numProcesses):
+                        search = mc.mcSearchExp3(
+                                searchPs[j],
+                                format,
+                                teams,
+                                limit=limit,
+                                seed=seed,
+                                p1InitActions=p1Actions,
+                                p2InitActions=p2Actions,
+                                mcData=mcDatasets[j])
+                        searches.append(search)
 
-                await asyncio.gather(*searches)
 
-                #combine the processes results together, purge unused information
-                #this assumes that any state that isn't seen in two consecutive iterations isn't worth keeping
-                #it also takes a little bit of processing but that should be okay
-                print('combining', file=sys.stderr)
+                    await asyncio.gather(*searches)
 
-                #record which states were seen in the last iteration
-                seenStates = {}
-                for data in mcDatasets:
-                    for j in range(2):
-                        seen = data[j]['seenStates']
-                        for state in seen:
-                            seenStates[state] = True
+                    #combine the processes results together, purge unused information
+                    #this assumes that any state that isn't seen in two consecutive iterations isn't worth keeping
+                    #it also takes a little bit of processing but that should be okay
+                    print('combining', file=sys.stderr)
 
-                #combine data on states that were seen in any search
-                #in the last iteration
-                combMcData = [{
-                    'countTable': collections.defaultdict(int),
-                    'expValueTable': collections.defaultdict(int),
-                    'seenStates': {},
-                    'gamma': 0.1} for j in range(2)]
-                for data in mcDatasets:
-                    for j in range(2):
-                        countTable = data[j]['countTable']
-                        expValueTable = data[j]['expValueTable']
-                        for state, action in countTable:
-                            if state in seenStates:
-                                combMcData[j]['countTable'][(state, action)] += countTable[(state, action)]
-                                combMcData[j]['expValueTable'][(state, action)] += expValueTable[(state, action)]
+                    #record which states were seen in the last iteration
+                    seenStates = {}
+                    for data in mcDatasets:
+                        for j in range(2):
+                            seen = data[j]['seenStates']
+                            for state in seen:
+                                seenStates[state] = True
 
-                #copy the combined data back into the datasets
-                mcDatasets = [copy.deepcopy(combMcData) for j in range(numProcesses)]
+                    #combine data on states that were seen in any search
+                    #in the last iteration
+                    combMcData = [{
+                        'countTable': collections.defaultdict(int),
+                        'expValueTable': collections.defaultdict(int),
+                        'seenStates': {},
+                        'gamma': 0.3} for j in range(2)]
+                    for data in mcDatasets:
+                        for j in range(2):
+                            countTable = data[j]['countTable']
+                            expValueTable = data[j]['expValueTable']
+                            for state, action in countTable:
+                                if state in seenStates:
+                                    combMcData[j]['countTable'][(state, action)] += countTable[(state, action)]
+                                    combMcData[j]['expValueTable'][(state, action)] += expValueTable[(state, action)]
+
+                    #copy the combined data back into the datasets
+                    mcDatasets = [copy.deepcopy(combMcData) for j in range(numProcesses)]
 
                 #this assumes that both player1 and player2 get requests each turn
                 #which I think is accurate, but most formats will give one player a waiting request
                 #this will lock up if a player causes an error, so don't do that
 
-                async def playTurn(queue, myMcData, actionList, cmdHeader):
-                    #figure out what kind of action we need
+                async def playTurn(queue, myMcData, actionList, cmdHeader, initMoves):
+
                     request = await queue.get()
-                    state = request[1]
-                    actions = moves.getMoves(format, state[1])
 
-                    normProbList = []
-                    expValueList = []
-                    #the mcdatasets are all combined, so we can just look at the first
-                    data = myMcData[0]
-                    normProbs = mc.getProbsExp3(data, state, actions)
-                    expValue = mc.getExpValueExp3(data, state, actions, normProbs)
-                    probSum = np.sum(normProbs)
+                    if len(initMoves) > 0:
+                        action = initMoves[0]
+                        del initMoves[0]
+                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' pre-set action:', action, file=file)
+                    else:
+                        #figure out what kind of action we need
+                        state = request[1]
+                        actions = moves.getMoves(format, state[1])
 
-                    print('|c|' + cmdHeader + '|Turn ' + str(i) + ' expected value:', '%.1f%%' % (expValue * 100), file=file)
-                    for j in range(len(actions)):
-                        if normProbs[j] > 0:
-                            print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actions[j],
-                                    'prob:', '%.1f%%' % (normProbs[j] * 100), file=file)
+                        normProbList = []
+                        expValueList = []
+                        #the mcdatasets are all combined, so we can just look at the first
+                        data = myMcData[0]
+                        normProbs = mc.getProbsExp3(data, state, actions)
+                        expValue = mc.getExpValueExp3(data, state, actions, normProbs)
+                        probSum = np.sum(normProbs)
 
-                    action = np.random.choice(actions, p=normProbs)
+                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' expected value:', '%.1f%%' % (expValue * 100), file=file)
+                        for j in range(len(actions)):
+                            if normProbs[j] > 0:
+                                print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actions[j],
+                                        'prob:', '%.1f%%' % (normProbs[j] * 100), file=file)
+
+                        action = np.random.choice(actions, p=normProbs)
+
                     actionList.append(action)
                     await game.cmdQueue.put(cmdHeader + action)
 
-                await playTurn(game.p1Queue, [data[0] for data in mcDatasets], p1Actions, '>p1')
-                await playTurn(game.p2Queue, [data[1] for data in mcDatasets], p2Actions, '>p2')
+                await playTurn(game.p1Queue, [data[0] for data in mcDatasets], p1Actions, '>p1', initMoves[0])
+                await playTurn(game.p2Queue, [data[1] for data in mcDatasets], p2Actions, '>p2', initMoves[1])
 
         gameTask = asyncio.ensure_future(play())
         winner = await game.winner
@@ -209,7 +219,7 @@ async def playTestGame(teams, limit=100, format='1v1', file=sys.stdout):
 
     finally:
         mainPs.terminate()
-        for ps in searches:
+        for ps in searchPs:
             ps.terminate()
 
 async def getPSProcess():
@@ -218,16 +228,17 @@ async def getPSProcess():
             stdout=subprocess.PIPE)
 
 async def main():
-    teams = (testSinglesTeams[0], testSinglesTeams[1])
-    #teams = (testTeams[0], testTeams[3])
-    await playTestGame(teams, format='singles', limit=1000)
+    #teams = (testSinglesTeams[0], testSinglesTeams[1])
+    teams = (testTeams[0], testTeams[3])
+    initMoves = ([' team 2'], [' team 1'])
+    await playTestGame(teams, format='1v1', limit=1000, numProcesses=1, initMoves=initMoves)
     """
     i = 0
     while True:
         limit = 100 * 2 ** i
         print('starting game with limit', limit, file=sys.stderr)
         with open('iterout' + str(limit) + '.txt', 'w') as file:
-            await playTestGame(limit=limit, file=file)
+            await playTestGame(teams, format='1v1', limit=limit, file=file)
         i += 1
     """
 
