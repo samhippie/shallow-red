@@ -100,8 +100,13 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.
         #this will get really big with n=3 after 20ish turns if you
         #don't purge old data
         mcDatasets = []
+
+        #likelihood of the search agent picking random moves
+        gamma = 0.1
+        #moves with probabilites below this are not considered
+        probCutoff = 0.03
         for i in range(numProcesses):
-            mcDatasets.append([{}, {}])
+            mcDatasets.append([{'gamma': gamma}, {'gamma': gamma}])
 
         #this needs to be a coroutine so we can cancel it when the game ends
         #which due to concurrency issues might not be until we get into the MCTS loop
@@ -157,7 +162,7 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.
                         'countTable': collections.defaultdict(int),
                         'expValueTable': collections.defaultdict(int),
                         'seenStates': {},
-                        'gamma': 0.3} for j in range(2)]
+                        'gamma': gamma} for j in range(2)]
                     for data in mcDatasets:
                         for j in range(2):
                             countTable = data[j]['countTable']
@@ -187,13 +192,13 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.
                         state = request[1]
                         actions = moves.getMoves(format, state[1])
 
-                        normProbList = []
-                        expValueList = []
                         #the mcdatasets are all combined, so we can just look at the first
                         data = myMcData[0]
-                        normProbs = mc.getProbsExp3(data, state, actions)
-                        expValue = mc.getExpValueExp3(data, state, actions, normProbs)
-                        probSum = np.sum(normProbs)
+                        probs = mc.getProbsExp3(data, state, actions)
+                        expValue = mc.getExpValueExp3(data, state, actions, probs)
+                        #remove low probability moves, likely just noise
+                        normProbs = np.array([p if p > probCutoff else 0 for p in probs])
+                        normProbs = normProbs / np.sum(normProbs)
 
                         print('|c|' + cmdHeader + '|Turn ' + str(i) + ' expected value:', '%.1f%%' % (expValue * 100), file=file)
                         for j in range(len(actions)):
@@ -230,17 +235,15 @@ async def getPSProcess():
 async def main():
     #teams = (testSinglesTeams[0], testSinglesTeams[1])
     teams = (testTeams[0], testTeams[3])
-    initMoves = ([' team 2'], [' team 1'])
-    await playTestGame(teams, format='1v1', limit=1000, numProcesses=1, initMoves=initMoves)
-    """
+    initMoves = ([], [])
+    #await playTestGame(teams, format='1v1', limit=1000, numProcesses=3, initMoves=initMoves)
     i = 0
     while True:
         limit = 100 * 2 ** i
         print('starting game with limit', limit, file=sys.stderr)
         with open('iterout' + str(limit) + '.txt', 'w') as file:
-            await playTestGame(teams, format='1v1', limit=limit, file=file)
+            await playTestGame(teams, format='1v1', limit=limit, numProcesses=3, file=file)
         i += 1
-    """
 
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()
