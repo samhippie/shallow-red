@@ -37,6 +37,14 @@ singlesTeams = [
 #restricted 2v2 doubles, with teams of 2 mons
 tvtTeams = [
     '|kyogre|choicescarf||waterspout,scald,thunder,icebeam|Modest|4,,,252,,252||,0,,,,|||]|tapulele|lifeorb||protect,psychic,moonblast,allyswitch|Timid|36,,,252,,220||,0,,,,|||',
+
+    'I hate anime|tapufini|choicescarf||muddywater,dazzlinggleam,haze,icebeam|Modest|12,,,252,,244||,0,,,,||50|]Anime is life|salazzle|focussash||fakeout,sludgebomb,flamethrower,protect|Timid|4,,,252,,252||||50|',
+
+    'can\'t trust others|garchomp|groundiumz|H|earthquake,rockslide,substitute,protect|Adamant|12,156,4,,116,220||||50|]dirty dan|mukalola|aguavberry|1|knockoff,poisonjab,shadowsneak,protect|Adamant|188,244,44,,20,12||||50|',
+
+    '|venusaur|focussash|H|protect,sludgebomb,grassknot,sleeppowder|Modest|4,,,252,,252||,0,,,,||50|]|groudon|figyberry||precipiceblades,rockslide,swordsdance,protect|Jolly|116,252,,,,140||||50|',
+
+    '|lunala|spookyplate||moongeistbeam,psyshock,psychup,protect|Timid|4,,,252,,252||,0,,,,||50|]|incineroar|figyberry|H|flareblitz,knockoff,uturn,fakeout|Adamant|236,4,4,,236,28||||50|',
 ]
 
 
@@ -434,15 +442,42 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.
                         probs = mc.getProbsExp3(data, state, actions)
                         expValue = mc.getExpValueExp3(data, state, actions, probs)
                         #remove low probability moves, likely just noise
-                        #I'm also trying out using a temperature parameter to make it a little greedier
-                        temp = 1
-                        normProbs = np.array([p**(1/temp) if p > probCutoff else 0 for p in probs])
+                        #this can remove every action, but if that's the case then it's doesn't really matter
+                        #as all the probabilites are low
+                        normProbs = np.array([p if p > probCutoff else 0 for p in probs])
                         normProbs = normProbs / np.sum(normProbs)
 
                         print('|c|' + cmdHeader + '|Turn ' + str(i) + ' expected value:', '%.1f%%' % (expValue * 100), file=file)
                         for j in range(len(actions)):
+                            action = actions[j].split(',')
+                            actionText = []
+                            for k in range(len(action)):
+                                a = action[k]
+                                a = a.strip()
+                                if 'pass' in a:
+                                    actionText.append('pass')
+                                elif 'move' in a:
+                                    parts = a.split(' ')
+                                    moveNum = int(parts[1])
+                                    if len(parts) < 3:
+                                        targetNum = 0
+                                    else:
+                                        targetNum = int(parts[2])
+                                    move = request[1]['active'][k]['moves'][moveNum-1]['move']
+                                    if targetNum != 0:
+                                        actionText.append(move + ' into slot ' + str(targetNum))
+                                    else:
+                                        actionText.append(move)
+                                elif 'team' in a:
+                                    actionText.append(a)
+                                elif 'switch' in a:
+                                    #TODO
+                                    actionText.append(a)
+                                else:
+                                    actionText.append('unknown action: ' + a)
+                            actionString = ','.join(actionText)
                             if normProbs[j] > 0:
-                                print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actions[j],
+                                print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actionString,
                                         'prob:', '%.1f%%' % (normProbs[j] * 100), file=file)
 
                         action = np.random.choice(actions, p=normProbs)
@@ -474,10 +509,10 @@ async def getPSProcess():
 async def main():
     #teams = (singlesTeams[0], singlesTeams[1])
     #teams = (ovoTeams[4], ovoTeams[4])
-    teams = (tvtTeams[0], tvtTeams[0])
+    teams = (tvtTeams[3], tvtTeams[4])
     initMoves = ([], [])
     #await playRandomGame(teams, format='2v2doubles')
-    await playTestGame(teams, format='2v2doubles', limit=1000, numProcesses=1, initMoves = initMoves)
+    await playTestGame(teams, format='2v2doubles', limit=10000, numProcesses=3, initMoves = initMoves)
     """
     limit1 = 1000
     numProcesses1 = 1
@@ -497,7 +532,7 @@ async def main():
         limit = 100 * 2 ** i
         print('starting game with limit', limit, file=sys.stderr)
         with open('iterout' + str(limit) + '.txt', 'w') as file:
-            await playTestGame(teams, format='1v1', limit=limit, numProcesses=3, file=file)
+            await playTestGame(teams, format='2v2doubles', limit=limit, numProcesses=1, file=file)
         i += 1
     """
 
