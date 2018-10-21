@@ -12,6 +12,8 @@ from game import Game
 import moves
 
 #Decoupled UCT
+#this is out of date, probably won't be updated
+
 #runs through a monte carlo playout for a single player
 #so two of these need to be running for a 2 player game
 #probTable maps (state, action) to (win, count)
@@ -164,18 +166,21 @@ async def mcSearchDUCT(ps, teams, limit=100,
 #mcData has expValueTable, which maps (stat, action) to an expected value
 #both should be defaultdict to 0
 #mcData has gamma, which is a number [0,1], prob of picking random move
+#iter is the iteration number, which may be used to compute gamma
 async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
-        format, errorPunishment=100, initActions=[]):
+        format, iter=0, initActions=[]):
 
     countTable = mcData['countTable']
     expValueTable = mcData['expValueTable']
-    gamma = mcData['gamma']
+    gamma = mcData['gamma'](iter)
     seenStates = mcData['seenStates']
 
+    """
     #need to track these so we can correct errors
     prevState = None
     prevRequestType = None
     prevAction = None
+    """
 
     #history so we can update probTable
     history = []
@@ -189,6 +194,7 @@ async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
         request = await requestQueue.get()
 
         if request[0] == Game.REQUEST or request[0] == Game.ERROR:
+            """
             if request[0] == Game.ERROR:
                 if len(initActions) > 0:
                     print('WARNING got an error following initActions', file=sys.stderr)
@@ -200,9 +206,12 @@ async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
                 history = history[0:-1]
             else:
                 state = request[1]
+            """
+            req = request[1]
+            state = req['stateHash']
 
             seenStates[state] = True
-            actions = moves.getMoves(format, state[1])
+            actions = moves.getMoves(format, req)
 
             #check if we ran out of initActions on the previous turn
             #if so, we need to change the PRNG
@@ -240,8 +249,8 @@ async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
             #save our action
             history.append((state, bestAction, bestActionProb))
 
-            prevAction = bestAction
-            prevState = state
+            #prevAction = bestAction
+            #prevState = state
             #send out the action
             await cmdQueue.put(cmdHeader + bestAction)
 
@@ -266,7 +275,7 @@ async def mcSearchExp3(ps, format, teams, mcData, limit=100,
         if 'expValueTable' not in mcData[i]:
             mcData[i]['expValueTable'] = collections.defaultdict(int)
         if 'gamma' not in mcData[i]:
-            mcData[i]['gamma'] = 0.3
+            mcData[i]['gamma'] = lambda x: 0.3
         if 'seenStates' not in mcData[i]:
             mcData[i]['seenStates'] = {}
 
@@ -277,10 +286,10 @@ async def mcSearchExp3(ps, format, teams, mcData, limit=100,
         await game.startGame()
         await asyncio.gather(
                 mcExp3Impl(game.p1Queue, game.cmdQueue,
-                    ">p1", mcData=mcData[0], format=format, errorPunishment=2*limit,
+                    ">p1", mcData=mcData[0], format=format,
                     initActions=p1InitActions),
                 mcExp3Impl(game.p2Queue, game.cmdQueue,
-                    ">p2", mcData=mcData[1], format=format, errorPunishment=2*limit,
+                    ">p2", mcData=mcData[1], format=format,
                     initActions=p2InitActions))
     print(file=sys.stderr)
 
@@ -290,7 +299,17 @@ def getProbsExp3(mcData, state, actions):
     counts = [countTable[(state, action)] for action in actions]
     expValueTable = mcData['expValueTable']
     totalCount = np.sum(counts)
-    probs = np.array([max(0, c - mcData['gamma'] * totalCount / len(actions)) for c in counts])
+
+    #not sure if I should make this adjustment or not
+    #experiments seem to show that it helps
+
+    #if average gamma is specified, use it
+    #otherwise assume gamma is constant
+    if 'avgGamma' in mcData:
+        avgGamma = mcData['avgGamma']
+    else:
+        avgGamma = mcData['gamma'](0)
+    probs = np.array([max(0, c - avgGamma * totalCount / len(actions)) for c in counts])
     probs = probs / np.sum(probs)
     return probs
 
@@ -308,8 +327,7 @@ def getExpValueExp3(mcData, state, actions, probs):
         if counts[i] == 0:
             continue
         xv = expValueTable[(state, action)] * probs[i] / counts[i]
-        if expValueTable[(state, action)] >= 0:#negative values are for illegal moves
-            xvs.append(xv)
+        xvs.append(xv)
     return np.mean(xvs)
 
 
