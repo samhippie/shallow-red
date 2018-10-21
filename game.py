@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
-import sys
 import asyncio
+import json
+import sys
 
 #handles input and output of a single match
 #players should read requests from p1Queue/p2Queue
@@ -61,14 +62,16 @@ class Game:
         #long as the format is close we should be fine
         if self.format == 'singles':
             psFormat = 'anythinggoes'
+        elif self.format == '2v2':
+            psFormat = '2v2doubles'
         else:
             psFormat = self.format
 
         #commands to get the battle going
         initCommands = [
             '>start {"formatid":"gen7' + psFormat + '"' + (',"seed":' + str(self.seed) if self.seed else '') + '}',
-            '>player p1 {"name":"bot1", "team":"' + self.teams[0] + '"}',
-            '>player p2 {"name":"bot2", "team":"' + self.teams[1] + '"}',
+            '>player p1 {"name":"bot1", "avatar": "43", "team":"' + self.teams[0] + '"}',
+            '>player p2 {"name":"bot2", "avatar": "43", "team":"' + self.teams[1] + '"}',
         ]
 
         for cmd in initCommands:
@@ -130,12 +133,14 @@ class Game:
             #sends the request to the current recipient
             elif line.startswith('|request'):
                 message = line[9:]
-                requestType = self.getRequestType(message)
-                await curQueue.put((Game.REQUEST, (self.state, requestType)))
+                message = json.loads(message)
+                await curQueue.put((Game.REQUEST, message))
 
             #tells the current recipient their last response was rejected
+            #in the future errors shouldn't happen
             elif line.startswith('|error'):
-                await curQueue.put((Game.ERROR,))
+                print('ERROR', line, file=sys.stderr)
+                #await curQueue.put((Game.ERROR,))
 
             #game is over, send out messages and clean up
             elif line.startswith('|win'):
@@ -164,6 +169,8 @@ class Game:
                 running = False
                 self.winner.set_result(winner)
 
+
+"""
     def getRequestType(self, message):
         if message.startswith('{"teamPreview"'):
             return Game.REQUEST_TEAM
@@ -173,5 +180,7 @@ class Game:
             return Game.REQUEST_WAIT
         else:
             return Game.REQUEST_TURN
+        pass
 
+"""
 
