@@ -63,7 +63,7 @@ def getMoves(format, req):
                         continue
                     if move['target'] == 'allySide':
                         targets = ['-1']
-                    elif move['target'] == 'all' or move['target'] == 'self' or move['target'] == 'allAdjacentFoes':
+                    elif move['target'] == 'all' or move['target'] == 'self' or move['target'] == 'allAdjacentFoes' or move['target'] == 'allAdjacent':
                         targets = ['']
                     elif move['target'] == 'normal':
                         targets = ['-1' if i == 1 else '-2', '1', '2']
