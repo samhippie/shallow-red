@@ -69,12 +69,9 @@ async def playRandomGame(teams, format, ps=None):
             req = await queue.get()
             if req[0] == Game.END:
                 break
-            #elif req[0] == Game.ERROR:
-                #req = lastRequest
-            #lastRequest = req
 
             actions = moves.getMoves(format, req[1])
-            print(cmdHeader, 'actions', actions)
+            #print(cmdHeader, 'actions', actions)
 
             action = random.choice(actions)
             print(cmdHeader, 'picked', action)
@@ -508,11 +505,11 @@ async def getPSProcess():
 
 async def main():
     #teams = (singlesTeams[0], singlesTeams[1])
-    #teams = (ovoTeams[4], ovoTeams[4])
-    teams = (tvtTeams[3], tvtTeams[4])
+    teams = (ovoTeams[4], ovoTeams[4])
+    #teams = (tvtTeams[3], tvtTeams[4])
     initMoves = ([], [])
-    #await playRandomGame(teams, format='2v2doubles')
-    await playTestGame(teams, format='2v2doubles', limit=10000, numProcesses=3, initMoves = initMoves)
+    #await playRandomGame(teams, format='1v1', ps=ps)
+    await playTestGame(teams, format='1v1', limit=100, numProcesses=3, initMoves = initMoves)
     """
     limit1 = 1000
     numProcesses1 = 1
