@@ -24,7 +24,7 @@ ovoTeams = [
 
     '|tapulele|psychiumz||psychic,calmmind,reflect,moonblast|Calm|252,,60,,196,||,0,,,,|||]|charizard|charizarditex||willowisp,flamecharge,flareblitz,outrage|Jolly|252,,,,160,96|||||]|pheromosa|fightiniumz||bugbuzz,icebeam,focusblast,lunge|Modest|,,160,188,,160|||||',
 
-    '|charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,||,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,aurasphere|Quiet|252,4,,252,,|||||',
+    '|charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,||,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,icebeam|Quiet|252,4,,252,,|||||',
 ]
 
 #please don't use a stall team
@@ -45,6 +45,8 @@ tvtTeams = [
     '|venusaur|focussash|H|protect,sludgebomb,grassknot,sleeppowder|Modest|4,,,252,,252||,0,,,,||50|]|groudon|figyberry||precipiceblades,rockslide,swordsdance,protect|Jolly|116,252,,,,140||||50|',
 
     '|lunala|spookyplate||moongeistbeam,psyshock,psychup,protect|Timid|4,,,252,,252||,0,,,,||50|]|incineroar|figyberry|H|flareblitz,knockoff,uturn,fakeout|Adamant|236,4,4,,236,28||||50|',
+
+    '|kartana|assaultvest||leafblade,smartstrike,sacredsword,nightslash|Jolly|204,4,4,,84,212||||50|]|tapukoko|choicespecs||thunderbolt,dazzlinggleam,discharge,voltswitch|Timid|140,,36,204,28,100||,0,,,,||50|',
 ]
 
 
@@ -109,6 +111,17 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
 
         await game.startGame()
 
+        mcSearch1 = mc.mcSearchRM
+        getProbs1 = mc.getProbsRM
+        combineData1 = mc.combineRMData
+
+        mcSearch2 = mc.mcSearchRM
+        getProbs2 = mc.getProbsRM
+        combineData2 = mc.combineRMData
+
+        #mcSearch2 = mc.mcSearchExp3
+        #getProbs2 = mc.getProbsExp3
+        #combineData2 = mc.combineExp3Data
 
         #holds the montecarlo data
         #each entry goes to one process
@@ -147,7 +160,7 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
         #moves with probabilites below this are not considered
         probCutoff = 0.03
 
-        print('|c|server|bot1 has game limit', limit1, 'x', numProcesses1, ', bot 2 has game limit', limit2, 'x', numProcesses2, file=file)
+        print('|c|server|bot1 uses RM with game limit', limit1, 'x', numProcesses1, ', bot 2 uses Exp3 with game limit', limit2, 'x', numProcesses2, file=file)
         #this needs to be a coroutine so we can cancel it when the game ends
         #which due to concurrency issues might not be until we get into the MCTS loop
         async def play():
@@ -171,7 +184,7 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                     searches1 = []
                     searches2 = []
                     for j in range(numProcesses1):
-                        search1 = mc.mcSearchExp3(
+                        search1 = mcSearch1(
                                 searchPs1[j],
                                 format,
                                 teams,
@@ -179,11 +192,14 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                                 seed=seed,
                                 p1InitActions=p1Actions,
                                 p2InitActions=p2Actions,
-                                mcData=mcDatasets1[j])
+                                mcData=mcDatasets1[j],
+                                posReg=True,
+                                initExpVal=0,
+                                probScaling=None)
                         searches1.append(search1)
 
                     for j in range(numProcesses2):
-                        search2 = mc.mcSearchExp3(
+                        search2 = mcSearch2(
                                 searchPs2[j],
                                 format,
                                 teams,
@@ -191,75 +207,32 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                                 seed=seed,
                                 p1InitActions=p1Actions,
                                 p2InitActions=p2Actions,
-                                mcData=mcDatasets2[j])
+                                mcData=mcDatasets2[j],
+                                posReg=True,
+                                initExpVal=0,
+                                probScaling='Linear')
                         searches2.append(search2)
 
 
 
-                    await asyncio.gather(*searches1)
-                    await asyncio.gather(*searches2)
+                    #await asyncio.gather(*searches1)
+                    #await asyncio.gather(*searches2)
+                    await asyncio.gather(*searches1, *searches2)
 
                     #combine the processes results together, purge unused information
                     #this assumes that any state that isn't seen in two consecutive iterations isn't worth keeping
                     #it also takes a little bit of processing but that should be okay
                     print('combining', file=sys.stderr)
 
-                    #record which states were seen in the last iteration
-                    seenStates1 = {}
-                    seenStates2 = {}
-                    for data in mcDatasets1:
-                        for j in range(2):
-                            seen = data[j]['seenStates']
-                            for state in seen:
-                                seenStates1[state] = True
-                    for data in mcDatasets2:
-                        for j in range(2):
-                            seen = data[j]['seenStates']
-                            for state in seen:
-                                seenStates2[state] = True
-
-
-                    #combine data on states that were seen in any search
-                    #in the last iteration
-                    combMcData1 = [{
-                        'countTable': collections.defaultdict(int),
-                        'expValueTable': collections.defaultdict(int),
-                        'seenStates': {},
-                        'gamma': gamma1,
-                        'avgGamma': avgGamma1} for j in range(2)]
-                    combMcData2 = [{
-                        'countTable': collections.defaultdict(int),
-                        'expValueTable': collections.defaultdict(int),
-                        'seenStates': {},
-                        'gamma': gamma2,
-                        'avgGamma': avgGamma1} for j in range(2)]
-                    for data in mcDatasets1:
-                        for j in range(2):
-                            countTable = data[j]['countTable']
-                            expValueTable = data[j]['expValueTable']
-                            for state, action in countTable:
-                                if state in seenStates1:
-                                    combMcData1[j]['countTable'][(state, action)] += countTable[(state, action)]
-                                    combMcData1[j]['expValueTable'][(state, action)] += expValueTable[(state, action)]
-                    for data in mcDatasets2:
-                        for j in range(2):
-                            countTable = data[j]['countTable']
-                            expValueTable = data[j]['expValueTable']
-                            for state, action in countTable:
-                                if state in seenStates2:
-                                    combMcData2[j]['countTable'][(state, action)] += countTable[(state, action)]
-                                    combMcData2[j]['expValueTable'][(state, action)] += expValueTable[(state, action)]
-
-                    #copy the combined data back into the datasets
-                    mcDatasets1 = [copy.deepcopy(combMcData1) for j in range(numProcesses1)]
-                    mcDatasets2 = [copy.deepcopy(combMcData2) for j in range(numProcesses2)]
+                    mcDatasets1 = combineData1(mcDatasets1)
+                    mcDatasets2 = combineData2(mcDatasets2)
 
                 #this assumes that both player1 and player2 get requests each turn
                 #which I think is accurate, but most formats will give one player a waiting request
                 #this will lock up if a player causes an error, so don't do that
 
                 #TODO this signature is ugly, reorganize it so we can just pass an index
-                async def playTurn(queue, myMcData, actionList, cmdHeader, initMoves):
+                async def playTurn(queue, myMcData, actionList, cmdHeader, initMoves, getProbs):
 
                     request = await queue.get()
 
@@ -269,17 +242,15 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                         print('|c|' + cmdHeader + '|Turn ' + str(i) + ' pre-set action:', action, file=file)
                     else:
                         #figure out what kind of action we need
-                        state = request[1]
-                        actions = moves.getMoves(format, state[1])
+                        state = request[1]['stateHash']
+                        actions = moves.getMoves(format, request[1])
 
                         #the mcdatasets are all combined, so we can just look at the first
                         data = myMcData[0]
-                        probs = mc.getProbsExp3(data, state, actions)
-                        expValue = mc.getExpValueExp3(data, state, actions, probs)
+                        probs = getProbs(data, state, actions)
                         normProbs = np.array([p if p > probCutoff else 0 for p in probs])
                         normProbs = normProbs / np.sum(normProbs)
 
-                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' expected value:', '%.1f%%' % (expValue * 100), file=file)
                         for j in range(len(actions)):
                             if normProbs[j] > 0:
                                 print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actions[j],
@@ -290,8 +261,8 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                     actionList.append(action)
                     await game.cmdQueue.put(cmdHeader + action)
 
-                await playTurn(game.p1Queue, [data[0] for data in mcDatasets1], p1Actions, '>p1', initMoves[0])
-                await playTurn(game.p2Queue, [data[1] for data in mcDatasets2], p2Actions, '>p2', initMoves[1])
+                await playTurn(game.p1Queue, [data[0] for data in mcDatasets1], p1Actions, '>p1', initMoves[0], getProbs1)
+                await playTurn(game.p2Queue, [data[1] for data in mcDatasets2], p2Actions, '>p2', initMoves[1], getProbs2)
 
         gameTask = asyncio.ensure_future(play())
         winner = await game.winner
@@ -371,7 +342,8 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.
 
                     searches = []
                     for j in range(numProcesses):
-                        search = mc.mcSearchExp3(
+                        #search = mc.mcSearchExp3(
+                        search = mc.mcSearchRM(
                                 searchPs[j],
                                 format,
                                 teams,
@@ -389,33 +361,8 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.
                     #this assumes that any state that isn't seen in two consecutive iterations isn't worth keeping
                     #it also takes a little bit of processing but that should be okay
                     print('combining', file=sys.stderr)
-
-                    #record which states were seen in the last iteration
-                    seenStates = {}
-                    for data in mcDatasets:
-                        for j in range(2):
-                            seen = data[j]['seenStates']
-                            for state in seen:
-                                seenStates[state] = True
-
-                    #combine data on states that were seen in any search
-                    #in the last iteration
-                    combMcData = [{
-                        'countTable': collections.defaultdict(int),
-                        'expValueTable': collections.defaultdict(int),
-                        'seenStates': {},
-                        'gamma': gamma} for j in range(2)]
-                    for data in mcDatasets:
-                        for j in range(2):
-                            countTable = data[j]['countTable']
-                            expValueTable = data[j]['expValueTable']
-                            for state, action in countTable:
-                                if state in seenStates:
-                                    combMcData[j]['countTable'][(state, action)] += countTable[(state, action)]
-                                    combMcData[j]['expValueTable'][(state, action)] += expValueTable[(state, action)]
-
-                    #copy the combined data back into the datasets
-                    mcDatasets = [copy.deepcopy(combMcData) for j in range(numProcesses)]
+                    #mcDatasets = mc.combineExp3Data(mcDatasets)
+                    mcDatasets = mc.combineRMData(mcDatasets)
 
                 #this assumes that both player1 and player2 get requests each turn
                 #which I think is accurate, but most formats will give one player a waiting request
@@ -436,15 +383,17 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.
 
                         #the mcdatasets are all combined, so we can just look at the first
                         data = myMcData[0]
-                        probs = mc.getProbsExp3(data, state, actions)
-                        expValue = mc.getExpValueExp3(data, state, actions, probs)
+                        #probs = mc.getProbsExp3(data, state, actions)
+                        probs = mc.getProbsRM(data, state, actions)
                         #remove low probability moves, likely just noise
                         #this can remove every action, but if that's the case then it's doesn't really matter
                         #as all the probabilites are low
                         normProbs = np.array([p if p > probCutoff else 0 for p in probs])
                         normProbs = normProbs / np.sum(normProbs)
 
-                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' expected value:', '%.1f%%' % (expValue * 100), file=file)
+                        print('probs', probs)
+                        print('norm probs', normProbs)
+
                         for j in range(len(actions)):
                             action = actions[j].split(',')
                             actionText = []
@@ -505,17 +454,38 @@ async def getPSProcess():
 
 async def main():
     #teams = (singlesTeams[0], singlesTeams[1])
+
+    #gen 1 starters mirror
     teams = (ovoTeams[4], ovoTeams[4])
+
+    #groudon vs lunala vgv19
     #teams = (tvtTeams[3], tvtTeams[4])
+    #fini vs koko vgc17
+    #teams = (tvtTeams[1], tvtTeams[5])
+    #initMoves = ([' team 12'], [' team 12'])
+    #initMoves = ([' team 1'], [' team 1'])
     initMoves = ([], [])
     #await playRandomGame(teams, format='1v1', ps=ps)
-    await playTestGame(teams, format='1v1', limit=100, numProcesses=3, initMoves = initMoves)
-    """
-    limit1 = 1000
+    #await playTestGame(teams, format='2v2doubles', limit=1000, numProcesses=1, initMoves=initMoves)
+    limit1 = 500
     numProcesses1 = 1
-    limit2 = 100
+    limit2 = 500
     numProcesses2 = 1
-    #for i in range(100):
+    bot1Wins = 0
+    bot2Wins = 0
+    #bot1 is 1x500 RM const scaling, bot2 is 1x500 linear scaling
+    #lunala mirror
+    #teams = (tvtTeams[4], tvtTeams[4])
+    for i in range(20):
+        with open(os.devnull, 'w') as devnull:
+            result = await playCompGame(teams, format='1v1', limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, initMoves=initMoves, file=devnull)
+        if result == 'bot1':
+            bot1Wins += 1
+        elif result == 'bot2':
+            bot2Wins += 1
+        print('bot1Wins', bot1Wins, 'bot2Wins', bot2Wins)
+    """
+    for i in range(100):
     #1 is temp = 1, 2 is temp = 4
     with open(os.devnull, 'w') as devnull:
         result = await playCompGame(teams, format='1v1', limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, initMoves=initMoves, file=devnull)
