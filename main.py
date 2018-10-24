@@ -195,7 +195,8 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                                 mcData=mcDatasets1[j],
                                 posReg=True,
                                 initExpVal=0,
-                                probScaling=None)
+                                probScaling=2,
+                                regScaling=1.5)
                         searches1.append(search1)
 
                     for j in range(numProcesses2):
@@ -209,15 +210,16 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                                 p2InitActions=p2Actions,
                                 mcData=mcDatasets2[j],
                                 posReg=True,
-                                initExpVal=0,
-                                probScaling='Linear')
+                                initExpVal=0.5,
+                                probScaling=2,
+                                regScaling=1.5)
                         searches2.append(search2)
 
 
 
-                    #await asyncio.gather(*searches1)
-                    #await asyncio.gather(*searches2)
-                    await asyncio.gather(*searches1, *searches2)
+                    await asyncio.gather(*searches1)
+                    await asyncio.gather(*searches2)
+                    #await asyncio.gather(*searches1, *searches2)
 
                     #combine the processes results together, purge unused information
                     #this assumes that any state that isn't seen in two consecutive iterations isn't worth keeping
@@ -351,7 +353,10 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.
                                 seed=seed,
                                 p1InitActions=p1Actions,
                                 p2InitActions=p2Actions,
-                                mcData=mcDatasets[j])
+                                mcData=mcDatasets[j],
+                                initExpVal=0,
+                                probScaling=2,
+                                regScaling=1.5)
                         searches.append(search)
 
 
@@ -390,9 +395,6 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.
                         #as all the probabilites are low
                         normProbs = np.array([p if p > probCutoff else 0 for p in probs])
                         normProbs = normProbs / np.sum(normProbs)
-
-                        print('probs', probs)
-                        print('norm probs', normProbs)
 
                         for j in range(len(actions)):
                             action = actions[j].split(',')
@@ -459,24 +461,25 @@ async def main():
     teams = (ovoTeams[4], ovoTeams[4])
 
     #groudon vs lunala vgv19
-    #teams = (tvtTeams[3], tvtTeams[4])
+    teams = (tvtTeams[3], tvtTeams[4])
     #fini vs koko vgc17
     #teams = (tvtTeams[1], tvtTeams[5])
-    #initMoves = ([' team 12'], [' team 12'])
+    initMoves = ([' team 12'], [' team 12'])
     #initMoves = ([' team 1'], [' team 1'])
-    initMoves = ([], [])
+    #initMoves = ([], [])
     #await playRandomGame(teams, format='1v1', ps=ps)
-    #await playTestGame(teams, format='2v2doubles', limit=1000, numProcesses=1, initMoves=initMoves)
+    #await playTestGame(teams, format='2v2doubles', limit=3000, numProcesses=3, initMoves=initMoves)
+    """
     limit1 = 500
-    numProcesses1 = 1
+    numProcesses1 = 3
     limit2 = 500
-    numProcesses2 = 1
+    numProcesses2 = 3
     bot1Wins = 0
     bot2Wins = 0
-    #bot1 is 1x500 RM const scaling, bot2 is 1x500 linear scaling
     #lunala mirror
     #teams = (tvtTeams[4], tvtTeams[4])
-    for i in range(20):
+    #bot1 has init expValue of 0, bot2 has 0.5
+    for i in range(200):
         with open(os.devnull, 'w') as devnull:
             result = await playCompGame(teams, format='1v1', limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, initMoves=initMoves, file=devnull)
         if result == 'bot1':
@@ -484,6 +487,8 @@ async def main():
         elif result == 'bot2':
             bot2Wins += 1
         print('bot1Wins', bot1Wins, 'bot2Wins', bot2Wins)
+    """
+
     """
     for i in range(100):
     #1 is temp = 1, 2 is temp = 4
@@ -493,15 +498,13 @@ async def main():
     """
 
 
-    """
     i = 0
     while True:
         limit = 100 * 2 ** i
         print('starting game with limit', limit, file=sys.stderr)
         with open('iterout' + str(limit) + '.txt', 'w') as file:
-            await playTestGame(teams, format='2v2doubles', limit=limit, numProcesses=1, file=file)
+            await playTestGame(teams, format='2v2doubles', limit=limit, numProcesses=3, initMoves=initMoves, file=file)
         i += 1
-    """
 
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()

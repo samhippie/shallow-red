@@ -346,7 +346,7 @@ def getExpValueExp3(mcData, state, actions, probs):
 
 
 #RM iteration
-async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, format, iter=0, initActions=[], initExpVal=0, posReg=True, probScaling=None):
+async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, format, iter=0, initActions=[], initExpVal=0, posReg=True, probScaling=0, regScaling=0):
 
     regretTable = mcData['regretTable']
     rewardTable = mcData['rewardTable']
@@ -450,6 +450,8 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
                     #selected action doesn't have its regret changed
                     if i != actionIndex:
                         regret = regretTable[(state, actions[i])]
+                        if regScaling != 0:
+                            regret *= ((iter+1)**regScaling) / ((iter+1)**regScaling + 1)
                         #need to normalize the action order
                         if rewardType == 1:
                             b1, b2 = actions[i], otherAction
@@ -468,12 +470,9 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
                             regretTable[(state, actions[i])] = regret + expValue - reward
 
                     #update each action's probability
-                    if probScaling == None:
-                        probTable[(state, actions[i])] += probs[i]
-                    elif probScaling == 'Linear':
-                        probTable[(state, actions[i])] += iter * probs[i]
-                    elif probScaling == 'Square':
-                        probTable[(state, actions[i])] += iter * iter * probs[i]
+                    probScale = ((iter+1) / ((iter + 2)))**probScaling
+                    oldProb = probTable[(state, actions[i])]
+                    probTable[(state, actions[i])] = probScale * oldProb + probs[i]
                 #probTable[(state, actions[actionIndex])] += probs[actionIndex]
 
                 #only player 1 updates the rewards
@@ -492,7 +491,7 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
 #initExpVal is the initial expected value. 0 and 0.5 both make sense
 #posReg is to enable only having 0 or positive regret
 async def mcSearchRM(ps, format, teams, mcData, limit=100,
-        seed=None, p1InitActions=[], p2InitActions=[], initExpVal=0, posReg=True, probScaling=None):
+        seed=None, p1InitActions=[], p2InitActions=[], initExpVal=0, posReg=True, probScaling=0, regScaling=0):
     #these are shared for both players
     #reward is for player 1, so player 2 should use 1-r
     rewardTable = collections.defaultdict(int)
@@ -532,11 +531,11 @@ async def mcSearchRM(ps, format, teams, mcData, limit=100,
                 mcRMImpl(game.p1Queue, game.cmdQueue,
                     ">p1", mcData=mcData[0],
                     otherMcData = mcData[1], format=format, iter=i,
-                    initActions=p1InitActions, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling),
+                    initActions=p1InitActions, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling, regScaling=regScaling),
                 mcRMImpl(game.p2Queue, game.cmdQueue,
                     ">p2", mcData=mcData[1],
                     otherMcData=mcData[0], format=format, iter=i,
-                    initActions=p2InitActions, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling))
+                    initActions=p2InitActions, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling, regScaling=regScaling))
     print(file=sys.stderr)
 
 def combineRMData(mcDatasets):
