@@ -505,7 +505,7 @@ async def trainModel(teams, format, games=100, epochs=100, valueModel=None):
         searchPs = await getPSProcess()
 
         if not valueModel:
-            valueModel = model.TrainedModel(alpha=0.0001)
+            valueModel = model.TrainedModel(alpha=0.001)
 
         def getExpValue(*args):
             return valueModel.getExpValue(*args)
@@ -543,7 +543,7 @@ async def trainModel(teams, format, games=100, epochs=100, valueModel=None):
                     regScaling=0)
 
             print('epoch', i, 'training', file=sys.stderr)
-            valueModel.train(epochs=100)
+            valueModel.train(epochs=10)
 
     finally:
         searchPs.terminate()
@@ -732,7 +732,7 @@ async def getPSProcess():
 
 async def main():
     #teams = (singlesTeams[0], singlesTeams[1])
-#gen 1 starters mirror
+    #gen 1 starters mirror
     teams = (ovoTeams[4], ovoTeams[4])
 
     #groudon vs lunala vgv19
@@ -744,9 +744,13 @@ async def main():
     initMoves = ([], [])
     #await playRandomGame(teams, format='1v1', ps=ps)
 
-    #valueModel = await trainModel(teams=teams, format='1v1', games=100, epochs=10)
-    await humanGame(humanTeams, format='1v1', limit=300)
-    #await playTestGame(teams, format='1v1', limit=100, numProcesses=1, initMoves=initMoves, valueModel=valueModel)
+    valueModel1 = await trainModel(teams=teams, format='1v1', games=100, epochs=100)
+    valueModel2 = model.BasicModel()
+    valueModel = model.CombinedModel(valueModel1, valueModel2)
+    valueModel.compare = True
+    #await humanGame(humanTeams, format='1v1', limit=300)
+    await playTestGame(teams, format='1v1', limit=1000, numProcesses=1, initMoves=initMoves, valueModel=valueModel)
+    print('mse', valueModel.getMSE(clear=True))
 
     """
     limit1 = 1000

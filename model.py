@@ -10,6 +10,55 @@ import modelInput
 
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
+#used to compare a trained model to a basic model for the same inputs
+class CombinedModel:
+
+    def __init__(self, trainedModel, basicModel):
+        self.trainedModel = trainedModel
+        self.basicModel = basicModel
+
+        self.compare = False
+        self.compPointsBasic = []
+        self.compPointsTrained = []
+
+    def getExpValue(self, stateHash=None, stateObj=None, action1=None, action2=None, bulk_input=None):
+        value = self.basicModel.getExpValue(stateHash, stateObj, action1, action2, bulk_input)
+        if self.compare:
+            trainedValue = self.trainedModel.getExpValue(stateHash, stateObj, action1, action2, bulk_input)
+            if type(value) == list:
+                basicValue = [0 if b == [None] else b[0] for b in value]
+                trainedValue = [t[0] for t in trainedValue]
+                self.compPointsBasic += basicValue
+                self.compPointsTrained += list(trainedValue)
+            else:
+                basicValue = 0 if value == None else value
+                self.compPointsBasic.append(basicValue)
+                self.compPointsTrained.append(trainedValue)
+
+        return value
+
+    def addReward(self, *args):
+        self.basicModel.addReward(*args)
+        self.trainedModel.addReward(*args)
+
+    def getMSE(self, clear=False):
+        sum = 0
+        count = 0
+        for i in range(len(self.compPointsBasic)):
+            b = self.compPointsBasic[i]
+            t = self.compPointsTrained[i]
+            sum += (b - t) ** 2
+            count += 1
+        if clear:
+            self.compPointsBasic = []
+            self.compPointsTrained = []
+            self.compare = False
+
+        if count == 0:
+            return 0
+        else:
+            return sum / count
+
 class TrainedModel:
 
     def __init__(self, alpha=0.001, model=None, width=256):
