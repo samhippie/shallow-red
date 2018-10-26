@@ -27,12 +27,13 @@ class Game:
     REQUEST_WAIT = 4
 
 
-    def __init__(self, ps, teams, format='1v1', seed=None, verbose=False, file=sys.stdout):
+    def __init__(self, ps, teams, format='1v1', seed=None, names=['bot1', 'bot2'], verbose=False, file=sys.stdout):
         #the pokemon showdown process
         self.ps = ps
         #a list of the two teams
         self.teams = teams
         self.format = format
+        self.names = names
         #the hash of the current game state
         self.state = 0
         #send commands here to be sent to the process
@@ -70,8 +71,8 @@ class Game:
         #commands to get the battle going
         initCommands = [
             '>start {"formatid":"gen7' + psFormat + '"' + (',"seed":' + str(self.seed) if self.seed else '') + '}',
-            '>player p1 {"name":"bot1", "avatar": "43", "team":"' + self.teams[0] + '"}',
-            '>player p2 {"name":"bot2", "avatar": "43", "team":"' + self.teams[1] + '"}',
+            '>player p1 {"name":"' + self.names[0] + '", "avatar": "43", "team":"' + self.teams[0] + '"}',
+            '>player p2 {"name":"' + self.names[1] + '", "avatar": "43", "team":"' + self.teams[1] + '"}',
         ]
 
         for cmd in initCommands:

@@ -12,7 +12,17 @@ import subprocess
 
 import moves
 from game import Game
+import model
+import modelInput
 import montecarlo as mc
+
+humanTeams = [
+
+    '|ditto|choicescarf|H|transform|Timid|252,,4,,,252||,0,,,,|||]|zygarde|earthplate|H|thousandarrows,coil,extremespeed,bulldoze|Impish|252,252,,,4,|||||]|dragonite|lifeorb|H|extremespeed,outrage,icepunch,dragondance|Jolly|4,252,,,,252|M||||',
+
+    '|gliscor|toxicorb|H|earthquake,toxic,substitute,protect|Jolly|252,156,,,100,|M||||]|tapulele|focussash||moonblast,psychic,calmmind,shadowball|Timid|4,,,252,,252||,0,,,,|||]|gyarados|sitrusberry||waterfall,icefang,stoneedge,dragondance|Adamant|156,252,,,,100|M||||',
+
+]
 
 #1v1 teams in packed format
 ovoTeams = [
@@ -24,7 +34,7 @@ ovoTeams = [
 
     '|tapulele|psychiumz||psychic,calmmind,reflect,moonblast|Calm|252,,60,,196,||,0,,,,|||]|charizard|charizarditex||willowisp,flamecharge,flareblitz,outrage|Jolly|252,,,,160,96|||||]|pheromosa|fightiniumz||bugbuzz,icebeam,focusblast,lunge|Modest|,,160,188,,160|||||',
 
-    '|charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,||,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,icebeam|Quiet|252,4,,252,,|||||',
+    '|charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,icebeam|Quiet|252,4,,252,,|M||||',
 ]
 
 #please don't use a stall team
@@ -40,11 +50,11 @@ tvtTeams = [
 
     'I hate anime|tapufini|choicescarf||muddywater,dazzlinggleam,haze,icebeam|Modest|12,,,252,,244||,0,,,,||50|]Anime is life|salazzle|focussash||fakeout,sludgebomb,flamethrower,protect|Timid|4,,,252,,252||||50|',
 
-    'can\'t trust others|garchomp|groundiumz|H|earthquake,rockslide,substitute,protect|Adamant|12,156,4,,116,220||||50|]dirty dan|mukalola|aguavberry|1|knockoff,poisonjab,shadowsneak,protect|Adamant|188,244,44,,20,12||||50|',
+    'can\'t trust others|garchomp|groundiumz|H|earthquake,rockslide,substitute,protect|Adamant|12,156,4,,116,220|M|||50|]dirty dan|mukalola|aguavberry|1|knockoff,poisonjab,shadowsneak,protect|Adamant|188,244,44,,20,12|M|||50|',
 
-    '|venusaur|focussash|H|protect,sludgebomb,grassknot,sleeppowder|Modest|4,,,252,,252||,0,,,,||50|]|groudon|figyberry||precipiceblades,rockslide,swordsdance,protect|Jolly|116,252,,,,140||||50|',
+    '|venusaur|focussash|H|protect,sludgebomb,grassknot,sleeppowder|Modest|4,,,252,,252|M|,0,,,,||50|]|groudon|figyberry||precipiceblades,rockslide,swordsdance,protect|Jolly|116,252,,,,140||||50|',
 
-    '|lunala|spookyplate||moongeistbeam,psyshock,psychup,protect|Timid|4,,,252,,252||,0,,,,||50|]|incineroar|figyberry|H|flareblitz,knockoff,uturn,fakeout|Adamant|236,4,4,,236,28||||50|',
+    '|lunala|spookyplate||moongeistbeam,psyshock,psychup,protect|Timid|4,,,252,,252||,0,,,,||50|]|incineroar|figyberry|H|flareblitz,knockoff,uturn,fakeout|Adamant|236,4,4,,236,28|M|||50|',
 
     '|kartana|assaultvest||leafblade,smartstrike,sacredsword,nightslash|Jolly|204,4,4,,84,212||||50|]|tapukoko|choicespecs||thunderbolt,dazzlinggleam,discharge,voltswitch|Timid|140,,36,204,28,100||,0,,,,||50|',
 ]
@@ -53,6 +63,209 @@ tvtTeams = [
 #location of the modified ps executable
 PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
 PS_ARG = 'simulate-battle'
+
+#used to play a game with the user
+#assumes RM, so no parallelism
+#human is p1, bot is p2
+async def humanGame(teams, limit=100, format='1v1', valueModel=None, file=sys.stdout, initMoves=([],[])):
+    try:
+
+        mainPs = await getPSProcess()
+
+        searchPs = await getPSProcess()
+
+        seed = [
+            random.random() * 0x10000,
+            random.random() * 0x10000,
+            random.random() * 0x10000,
+            random.random() * 0x10000,
+        ]
+
+        game = Game(mainPs, format=format, teams=teams, seed=seed, names=['meat sack', 'Your Robot Overlords'], verbose=True, file=file)
+
+
+
+        #holds the montecarlo data
+        #each entry goes to one process
+        #this will get really big with n=3 after 20ish turns if you
+        #don't purge old data
+        mcData = []
+
+        def gamma(iter):
+            return 0.3
+
+        if not valueModel:
+            valueModel = model.BasicModel()
+        #valueModel = model.BasicModel()
+
+        mcData = [{
+            'gamma': gamma,
+            'getExpValue': valueModel.getExpValue,
+            'addReward': valueModel.addReward,
+        }, {
+            'gamma': gamma,
+            'getExpValue': valueModel.getExpValue,
+            'addReward': valueModel.addReward,
+        }]
+
+
+        #moves with probabilites below this are not considered
+        probCutoff = 0.03
+
+        await game.startGame()
+
+        #this needs to be a coroutine so we can cancel it when the game ends
+        #which due to concurrency issues might not be until we get into the MCTS loop
+        async def play():
+            i = 0
+            #actions taken so far by in the actual game
+            p1Actions = []
+            p2Actions = []
+            #we reassign this later, so we have to declare it nonlocal
+            nonlocal mcData
+            while True:
+                i += 1
+                print('starting turn', i, file=sys.stderr)
+
+                #don't search if we aren't going to use the results
+                if len(initMoves[0]) == 0 or len(initMoves[1]) == 0:
+                    #I suspect that averaging two runs together will
+                    #give us more improvement than running for twice as long
+                    #and it should run faster than a single long search due to parallelism
+
+                    search = mc.mcSearchRM(
+                            searchPs,
+                            format,
+                            teams,
+                            limit=limit,
+                            seed=seed,
+                            p1InitActions=p1Actions,
+                            p2InitActions=p2Actions,
+                            mcData=mcData,
+                            initExpVal=0,
+                            probScaling=2,
+                            regScaling=1.5)
+
+                    await search
+
+                    #combine the processes results together, purge unused information
+                    #this assumes that any state that isn't seen in two consecutive iterations isn't worth keeping
+                    #it also takes a little bit of processing but that should be okay
+                    print('combining', file=sys.stderr)
+                    mcData = mc.combineRMData([mcData])[0]
+
+                #this assumes that both player1 and player2 get requests each turn
+                #which I think is accurate, but most formats will give one player a waiting request
+                #this will lock up if a player causes an error, so don't do that
+
+                async def playTurn(queue, myMcData, actionList, cmdHeader, initMoves):
+
+                    request = await queue.get()
+
+                    if len(initMoves) > 0:
+                        action = initMoves[0]
+                        del initMoves[0]
+                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' pre-set action:', action, file=file)
+                    else:
+                        #figure out what kind of action we need
+                        state = request[1]['stateHash']
+                        actions = moves.getMoves(format, request[1])
+
+                        #the mcdatasets are all combined, so we can just look at the first
+                        data = myMcData[0]
+                        #probs = mc.getProbsExp3(data, state, actions)
+                        probs = mc.getProbsRM(data, state, actions)
+                        #remove low probability moves, likely just noise
+                        #this can remove every action, but if that's the case then it's doesn't really matter
+                        #as all the probabilites are low
+                        normProbs = np.array([p if p > probCutoff else 0 for p in probs])
+                        normProbs = normProbs / np.sum(normProbs)
+
+                        action = np.random.choice(actions, p=normProbs)
+
+                    actionList.append(action)
+                    await game.cmdQueue.put(cmdHeader + action)
+
+                async def userTurn(queue, actionList, cmdHeader, initMoves):
+
+                    request = await queue.get()
+
+                    if len(initMoves) > 0:
+                        action = initMoves[0]
+                        del initMoves[0]
+                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' pre-set action:', action, file=file)
+                    else:
+                        #figure out what kind of action we need
+                        state = request[1]['stateHash']
+                        actions = moves.getMoves(format, request[1])
+
+
+                        actionTexts = []
+                        for j in range(len(actions)):
+                            action = actions[j].split(',')
+                            actionText = []
+                            for k in range(len(action)):
+                                a = action[k]
+                                a = a.strip()
+                                if 'pass' in a:
+                                    actionText.append('pass')
+                                elif 'move' in a:
+                                    parts = a.split(' ')
+                                    moveNum = int(parts[1])
+                                    if len(parts) < 3:
+                                        targetNum = 0
+                                    else:
+                                        targetNum = int(parts[2])
+                                    move = request[1]['active'][k]['moves'][moveNum-1]['move']
+                                    if targetNum != 0:
+                                        actionText.append(move + ' into slot ' + str(targetNum))
+                                    else:
+                                        actionText.append(move)
+                                elif 'team' in a:
+                                    actionText.append(a)
+                                elif 'switch' in a:
+                                    actionText.append(a)
+                                else:
+                                    actionText.append('unknown action: ' + a)
+                            actionString = ','.join(actionText)
+                            actionTexts.append(actionString)
+
+
+                        #ask the user which action to take
+                        print('Legal actions:')
+                        for j in range(len(actions)):
+                            print(j, actionTexts[j], '(' + actions[j] + ')')
+                        #humans are dumb and make mistakes
+                        while True:
+                            try:
+                                actionIndex = int(input('Your action:'))
+                                if actionIndex >= 0 and actionIndex < len(actions):
+                                    action = actions[actionIndex]
+                                    break
+                            except ValueException:
+                                pass
+                            print('try again')
+
+                        actionList.append(action)
+
+                        await game.cmdQueue.put(cmdHeader + action)
+
+
+                await userTurn(game.p1Queue, p1Actions, '>p1', initMoves[0])
+                await playTurn(game.p2Queue, mcData, p2Actions, '>p2', initMoves[1])
+
+        gameTask = asyncio.ensure_future(play())
+        winner = await game.winner
+        gameTask.cancel()
+        print('winner:', winner, file=sys.stderr)
+
+    except Exception as e:
+        print(e, file=sys.stderr)
+
+    finally:
+        mainPs.terminate()
+        searchPs.terminate()
+
 
 async def playRandomGame(teams, format, ps=None):
     if not ps:
@@ -73,6 +286,8 @@ async def playRandomGame(teams, format, ps=None):
                 break
 
             actions = moves.getMoves(format, req[1])
+            state = req[1]['state']
+            print('getting state tensor')
             #print(cmdHeader, 'actions', actions)
 
             action = random.choice(actions)
@@ -115,13 +330,13 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
         getProbs1 = mc.getProbsRM
         combineData1 = mc.combineRMData
 
-        mcSearch2 = mc.mcSearchRM
-        getProbs2 = mc.getProbsRM
-        combineData2 = mc.combineRMData
+        #mcSearch2 = mc.mcSearchRM
+        #getProbs2 = mc.getProbsRM
+        #combineData2 = mc.combineRMData
 
-        #mcSearch2 = mc.mcSearchExp3
-        #getProbs2 = mc.getProbsExp3
-        #combineData2 = mc.combineExp3Data
+        mcSearch2 = mc.mcSearchExp3
+        getProbs2 = mc.getProbsExp3
+        combineData2 = mc.combineExp3Data
 
         #holds the montecarlo data
         #each entry goes to one process
@@ -208,11 +423,11 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                                 seed=seed,
                                 p1InitActions=p1Actions,
                                 p2InitActions=p2Actions,
-                                mcData=mcDatasets2[j],
-                                posReg=True,
-                                initExpVal=0.5,
-                                probScaling=2,
-                                regScaling=1.5)
+                                mcData=mcDatasets2[j])
+                                #posReg=True,
+                                #initExpVal=0.5,
+                                #probScaling=2,
+                                #regScaling=1.5)
                         searches2.append(search2)
 
 
@@ -283,7 +498,59 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
             ps.terminate()
 
 
-async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.stdout, initMoves=([],[])):
+#trains a model for the given format with the given teams
+#returns the trained model
+async def trainModel(teams, format, games=100, epochs=100, valueModel=None):
+    try:
+        searchPs = await getPSProcess()
+
+        if not valueModel:
+            valueModel = model.TrainedModel(alpha=0.0001)
+
+        def getExpValue(*args):
+            return valueModel.getExpValue(*args)
+        def addReward(*args):
+            return valueModel.addReward(*args)
+
+        def gamma(iter):
+            return 0.3
+
+        mcData = [{
+            'gamma': gamma,
+            'getExpValue': valueModel.getExpValue,
+            'addReward': addReward,
+        }, {
+            'gamma': gamma,
+            'getExpValue': valueModel.getExpValue,
+            'addReward': addReward,
+        }]
+
+
+        print('starting network training', file=sys.stderr)
+        for i in range(epochs):
+            print('epoch', i, 'running', file=sys.stderr)
+            await mc.mcSearchRM(
+                    searchPs,
+                    format,
+                    teams,
+                    limit=games,
+                    #seed=seed,
+                    #p1InitActions=p1Actions,
+                    #p2InitActions=p2Actions,
+                    mcData=mcData,
+                    initExpVal=0,
+                    probScaling=0,
+                    regScaling=0)
+
+            print('epoch', i, 'training', file=sys.stderr)
+            valueModel.train(epochs=100)
+
+    finally:
+        searchPs.terminate()
+    return valueModel
+
+
+async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueModel=None, file=sys.stdout, initMoves=([],[])):
     try:
 
         mainPs = await getPSProcess()
@@ -299,7 +566,6 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.
 
         game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
-        await game.startGame()
 
 
         #holds the montecarlo data
@@ -310,18 +576,27 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.
 
         def gamma(iter):
             return 0.3
-        avgGamma = 0.3
+
+        if not valueModel:
+            valueModel = await trainModel(teams=teams, format=format, games=100, epochs=10)
+        #valueModel = model.BasicModel()
+
         for i in range(numProcesses):
             mcDatasets.append([{
                 'gamma': gamma,
-                'avgGamma': avgGamma,
+                'getExpValue': valueModel.getExpValue,
+                'addReward': valueModel.addReward,
             }, {
                 'gamma': gamma,
-                'avgGamma': avgGamma,
+                'getExpValue': valueModel.getExpValue,
+                'addReward': valueModel.addReward,
             }])
+
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03
+
+        await game.startGame()
 
         #this needs to be a coroutine so we can cancel it when the game ends
         #which due to concurrency issues might not be until we get into the MCTS loop
@@ -449,6 +724,7 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, file=sys.
         for ps in searchPs:
             ps.terminate()
 
+
 async def getPSProcess():
     return await asyncio.create_subprocess_exec(PS_PATH, PS_ARG,
             stdin=subprocess.PIPE,
@@ -456,29 +732,32 @@ async def getPSProcess():
 
 async def main():
     #teams = (singlesTeams[0], singlesTeams[1])
-
-    #gen 1 starters mirror
+#gen 1 starters mirror
     teams = (ovoTeams[4], ovoTeams[4])
 
     #groudon vs lunala vgv19
-    teams = (tvtTeams[3], tvtTeams[4])
+    #teams = (tvtTeams[3], tvtTeams[4])
     #fini vs koko vgc17
     #teams = (tvtTeams[1], tvtTeams[5])
-    initMoves = ([' team 12'], [' team 12'])
+    #initMoves = ([' team 12'], [' team 12'])
     #initMoves = ([' team 1'], [' team 1'])
-    #initMoves = ([], [])
+    initMoves = ([], [])
     #await playRandomGame(teams, format='1v1', ps=ps)
-    #await playTestGame(teams, format='2v2doubles', limit=3000, numProcesses=3, initMoves=initMoves)
+
+    #valueModel = await trainModel(teams=teams, format='1v1', games=100, epochs=10)
+    await humanGame(humanTeams, format='1v1', limit=300)
+    #await playTestGame(teams, format='1v1', limit=100, numProcesses=1, initMoves=initMoves, valueModel=valueModel)
+
     """
-    limit1 = 500
-    numProcesses1 = 3
-    limit2 = 500
-    numProcesses2 = 3
+    limit1 = 1000
+    numProcesses1 = 1
+    limit2 = 1000
+    numProcesses2 = 1
     bot1Wins = 0
     bot2Wins = 0
     #lunala mirror
     #teams = (tvtTeams[4], tvtTeams[4])
-    #bot1 has init expValue of 0, bot2 has 0.5
+    #bot1 has is RM, bot2 is Exp3
     for i in range(200):
         with open(os.devnull, 'w') as devnull:
             result = await playCompGame(teams, format='1v1', limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, initMoves=initMoves, file=devnull)
@@ -498,13 +777,15 @@ async def main():
     """
 
 
+    """
     i = 0
     while True:
-        limit = 100 * 2 ** i
+        limit = 1000# * 2 ** i
         print('starting game with limit', limit, file=sys.stderr)
-        with open('iterout' + str(limit) + '.txt', 'w') as file:
-            await playTestGame(teams, format='2v2doubles', limit=limit, numProcesses=3, initMoves=initMoves, file=file)
+        with open('iterout' + str(i) + '.txt', 'w') as file:
+            await playTestGame(teams, format='2v2doubles', limit=limit, valueModel=valueModel, numProcesses=1, initMoves=initMoves, file=file)
         i += 1
+    """
 
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import numpy as np
+import sys
 
 from game import Game
 
@@ -133,7 +134,7 @@ def getMovesImpl(format, req):
                         targets = ['']
                     elif move['target'] == 'allySide':
                         targets = ['-1' if i == 1 else '-2']
-                    elif move['target'] in ['all', 'self', 'allAdjacentFoes', 'allAdjacent']:
+                    elif move['target'] in ['all', 'self', 'allAdjacentFoes', 'allAdjacent', 'randomNormal']:
                         targets = ['']
                     elif move['target'] == 'normal':
                         targets = ['-1' if i == 1 else '-2', '1', '2']

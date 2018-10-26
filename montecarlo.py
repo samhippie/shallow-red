@@ -356,6 +356,10 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
     gamma = mcData['gamma'](iter)
     seenStates = mcData['seenStates']
 
+    #these can be managed somewhere else
+    getExpValue = mcData['getExpValue']
+    addReward = mcData['addReward']
+
     #need to do it this way so
     #the other player has access to our history
     mcData['history'] = []
@@ -372,6 +376,7 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
         if request[0] == Game.REQUEST or request[0] == Game.ERROR:
             req = request[1]
             state = req['stateHash']
+            stateObj = req['state']
 
             seenStates[state] = True
             actions = moves.getMoves(format, req)
@@ -422,7 +427,7 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
                 bestAction = actions[bestActionIndex]
 
             #save our action
-            history.append((state, bestActionIndex, actions, probs))
+            history.append((state, stateObj, bestActionIndex, actions, probs))
 
             #prevAction = bestAction
             #prevState = state
@@ -433,46 +438,76 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
             #need to use the other player's actions
             otherHistory = otherMcData['history']
 
+            expValueCache = {}
+            inputSet = []
+            #go ahead and get all the expValue inputs that we need
+            for i in range(len(history)):
+                state, stateObj, actionIndex, actions, probs = history[i]
+                action = actions[actionIndex]
+                _, _, otherActionIndex, otherActions, _ = otherHistory[i]
+                otherAction = otherActions[otherActionIndex]
+
+                for j in range(len(actions)):
+                    if rewardType == 1:
+                        b1, b2 = actions[j], otherAction
+                    else:
+                        b1, b2 = otherAction, actions[j]
+                    inputSet.append((state, stateObj, b1, b2))
+            #calculate all the expValues at once
+            expValueSet = getExpValue(bulk_input=inputSet)
+            for i in range(len(inputSet)):
+                state, _, b1, b2 = inputSet[i]
+                expValueCache[(state, b1, b2)] = expValueSet[i][0]
+
             #update probTable with our history + result
             reward = request[1]
             #rescale reward from [-1,1] to [0,1]
             reward = (reward + 1) / 2
             for i in range(len(history)):
                 #get our info
-                state, actionIndex, actions, probs = history[i]
+                state, stateObj, actionIndex, actions, probs = history[i]
                 action = actions[actionIndex]
                 #need the other player's action
-                _, otherActionIndex, otherActions, _ = otherHistory[i]
+                _, _, otherActionIndex, otherActions, _ = otherHistory[i]
                 otherAction = otherActions[otherActionIndex]
 
-                for i in range(len(actions)):
+                for j in range(len(actions)):
                     #update each action's regret
                     #selected action doesn't have its regret changed
-                    if i != actionIndex:
-                        regret = regretTable[(state, actions[i])]
+                    if j != actionIndex:
+                        regret = regretTable[(state, actions[j])]
                         if regScaling != 0:
                             regret *= ((iter+1)**regScaling) / ((iter+1)**regScaling + 1)
                         #need to normalize the action order
                         if rewardType == 1:
-                            b1, b2 = actions[i], otherAction
+                            b1, b2 = actions[j], otherAction
                         else:
-                            b1, b2 = otherAction, actions[i]
+                            b1, b2 = otherAction, actions[j]
                         #get the expected value of the action
-                        count = countTable[(state, b1, b2)]
-                        cumReward = rewardTable[(state, b1, b2)]
-                        if rewardType == 2:
-                            cumReward = count - cumReward
-                        expValue = initExpVal if count == 0 else cumReward / count
+                        if (state, b1, b2) in expValueCache:
+                            expValue = expValueCache[(state, b1, b2)]
+                        else:
+                            expValue = getExpValue(state, stateObj, b1, b2)
+                        #count = countTable[(state, b1, b2)]
+                        #cumReward = rewardTable[(state, b1, b2)]
+                        if expValue != None and rewardType == 2:
+                            #cumReward = count - cumReward
+                            expValue = 1 - expValue
+                        if expValue == None:
+                            expValue = initExpVal
+                        #network sometimes spits out bad values
+                        expValue = max(0, expValue)
+                        #expValue = initExpVal if count == 0 else cumReward / count
                         #use expValue to add regret
                         if posReg:
-                            regretTable[(state, actions[i])] = max(regret + expValue - reward, 0)
+                            regretTable[(state, actions[j])] = max(regret + expValue - reward, 0)
                         else:
-                            regretTable[(state, actions[i])] = regret + expValue - reward
+                            regretTable[(state, actions[j])] = regret + expValue - reward
 
                     #update each action's probability
                     probScale = ((iter+1) / ((iter + 2)))**probScaling
-                    oldProb = probTable[(state, actions[i])]
-                    probTable[(state, actions[i])] = probScale * oldProb + probs[i]
+                    oldProb = probTable[(state, actions[j])]
+                    probTable[(state, actions[j])] = probScale * oldProb + probs[j]
                 #probTable[(state, actions[actionIndex])] += probs[actionIndex]
 
                 #only player 1 updates the rewards
@@ -480,11 +515,13 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
                 #chosen set of actions, so it doesn't matter
                 #when exactly we update
                 if rewardType == 1:
-                    countTable[(state, action, otherAction)] += 1
-                    rewardTable[(state, action, otherAction)] += reward
+                    addReward(state, stateObj, action, otherAction, reward)
+                    #countTable[(state, action, otherAction)] += 1
+                    #rewardTable[(state, action, otherAction)] += reward
+                    #if 'valueRecord' in mcData:
+                        #mcData['valueRecord'].append(((stateObj, action, otherAction), reward))
 
             running = False
-
 
 
 #RM loop
@@ -522,6 +559,10 @@ async def mcSearchRM(ps, format, teams, mcData, limit=100,
     mcData[1]['countTable'] = mcData[0]['countTable']
     mcData[1]['rewardTable'] = mcData[0]['rewardTable']
 
+    #((state, action, action), reward) tuples
+    if 'valueRecord' not in mcData[0]:
+        mcData[0]['valueRecord'] = []
+
     print(end='', file=sys.stderr)
     for i in range(limit):
         print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
@@ -548,6 +589,29 @@ def combineRMData(mcDatasets):
             seen = data[j]['seenStates']
             for state in seen:
                 seenStates[state] = True
+
+    if num == 1:
+        #no need to copy data around, just delete it directly
+        data = mcDatasets[0]
+        for j in range(2):
+            probTable = data[j]['probTable']
+            regretTable = data[j]['regretTable']
+            for state, action in probTable:
+                if state not in seenStates:
+                    del probTable[(state, action)]
+                    del regretTable[(state, action)]
+
+        countTable = data[0]['countTable']
+        rewardTable = data[0]['rewardTable']
+
+        for state, a1, a2 in countTable:
+            if state not in seenStates:
+                del countTable[(state, a1, a2)]
+                del rewardTable[(state, a1, a2)]
+        data[1]['countTable'] = countTable
+        data[1]['rewardTable'] = rewardTable
+        return mcDatasets
+
 
     #combine data on states that were seen in any search
     #in the last iteration
