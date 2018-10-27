@@ -11,27 +11,40 @@ import modelInput
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 #used to compare a trained model to a basic model for the same inputs
+#can also be used if we want to train a model using the behavior of a basic model
 class CombinedModel:
 
     def __init__(self, trainedModel, basicModel):
         self.trainedModel = trainedModel
         self.basicModel = basicModel
 
+        #t controls output of getExpValue
+        #0 for basic model, 1 for trained, in between for weighted average
+        self.t = 0
+
         self.compare = False
         self.compPointsBasic = []
         self.compPointsTrained = []
 
     def getExpValue(self, stateHash=None, stateObj=None, action1=None, action2=None, bulk_input=None):
-        value = self.basicModel.getExpValue(stateHash, stateObj, action1, action2, bulk_input)
+        basicValue = self.basicModel.getExpValue(stateHash, stateObj, action1, action2, bulk_input)
+        trainedValue = self.trainedModel.getExpValue(stateHash, stateObj, action1, action2, bulk_input)
+
+        if type(basicValue) == list:
+            value = []
+            for i in range(len(basicValue)):
+                value.append([None if basicValue[i][0] == None else  basicValue[i][0] * (1-self.t) + trainedValue[i][0] * self.t])
+        else:
+            value = None if basicValue == None else basicValue * (1-self.t) + trainedValue * self.t
+
         if self.compare:
-            trainedValue = self.trainedModel.getExpValue(stateHash, stateObj, action1, action2, bulk_input)
-            if type(value) == list:
-                basicValue = [0 if b == [None] else b[0] for b in value]
-                trainedValue = [t[0] for t in trainedValue]
-                self.compPointsBasic += basicValue
-                self.compPointsTrained += list(trainedValue)
+            if type(basicValue) == list:
+                for i in range(len(basicValue)):
+                    #None means basic has never seen it, so we have no good data
+                    if basicValue[i][0] != None:
+                        self.compPointsBasic.append(basicValue[i][0])
+                        self.compPointsTrained.append(trainedValue[i][0])
             else:
-                basicValue = 0 if value == None else value
                 self.compPointsBasic.append(basicValue)
                 self.compPointsTrained.append(trainedValue)
 
@@ -40,6 +53,9 @@ class CombinedModel:
     def addReward(self, *args):
         self.basicModel.addReward(*args)
         self.trainedModel.addReward(*args)
+
+    def train(self, epochs=1, batch_size=None):
+        self.trainedModel.train(epochs, batch_size)
 
     def getMSE(self, clear=False):
         sum = 0
@@ -79,13 +95,23 @@ class TrainedModel:
         self.savedInputs = []
         self.savedLabels = []
 
+        self.expValueCache = {}
+
     def _compile(self):
         self.model.compile(
                 optimizer=tf.train.AdamOptimizer(self.alpha),
                 loss='logcosh')
 
-    #returns the expected value from the network
     def getExpValue(self, stateHash=None, stateObj=None, action1=None, action2=None, bulk_input=None):
+        if (stateHash, action1, action2) in self.expValueCache:
+            return self.expValueCache[(stateHash, action1, action2)]
+        value = self.genExpValue(stateHash, stateObj, action1, action2)
+        self.expValueCache[(stateHash, action1, action2)] = value
+        return value
+
+
+    #returns the expected value from the network
+    def genExpValue(self, stateHash=None, stateObj=None, action1=None, action2=None, bulk_input=None):
         if bulk_input:
             data = [modelInput.toInput(so, a1, a2) for _, so, a1, a2 in bulk_input]
             return self.model.predict(np.array(data))
@@ -108,6 +134,7 @@ class TrainedModel:
                 batch_size=batch_size)
         self.savedInputs = []
         self.savedLabels = []
+        self.expValueCache = {}
 
     #Save and load need to save/load the idMap from modeInput
     def saveModel(self, name):

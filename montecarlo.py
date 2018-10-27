@@ -438,6 +438,7 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
             #need to use the other player's actions
             otherHistory = otherMcData['history']
 
+            """
             expValueCache = {}
             inputSet = []
             #go ahead and get all the expValue inputs that we need
@@ -458,6 +459,7 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
             for i in range(len(inputSet)):
                 state, _, b1, b2 = inputSet[i]
                 expValueCache[(state, b1, b2)] = expValueSet[i][0]
+            """
 
             #update probTable with our history + result
             reward = request[1]
@@ -484,10 +486,10 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
                         else:
                             b1, b2 = otherAction, actions[j]
                         #get the expected value of the action
-                        if (state, b1, b2) in expValueCache:
-                            expValue = expValueCache[(state, b1, b2)]
-                        else:
-                            expValue = getExpValue(state, stateObj, b1, b2)
+                        #if (state, b1, b2) in expValueCache:
+                            #expValue = expValueCache[(state, b1, b2)]
+                        #else:
+                        expValue = getExpValue(state, stateObj, b1, b2)
                         #count = countTable[(state, b1, b2)]
                         #cumReward = rewardTable[(state, b1, b2)]
                         if expValue != None and rewardType == 2:
