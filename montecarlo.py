@@ -419,8 +419,17 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
 
             if len(initActions) > 0:
                 #blindly pick init action
-                bestAction = initActions[0]
-                bestActionIndex = actions.index(bestAction)
+                preAction = initActions[0]
+                #find close enough action in list
+                #PS client will generate team preview actions that
+                #are longer than what we expect, but we can just
+                #assume that the equivalent action is a prefix
+                bestActionIndex = 0
+                while bestActionIndex < len(actions):
+                    if preAction.startswith(actions[bestActionIndex].strip()):
+                        break
+                    bestActionIndex += 1
+                bestAction = actions[bestActionIndex]
                 initActions = initActions[1:]
             else:
                 #pick action based on probs
