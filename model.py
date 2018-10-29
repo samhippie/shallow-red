@@ -3,11 +3,12 @@
 import collections
 import numpy as np
 import os
-import tensorflow as tf
-from tensorflow import keras
+#import tensorflow as tf
+#from tensorflow import keras
 
 import modelInput
 
+"""
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 #used to compare a trained model to a basic model for the same inputs
@@ -57,6 +58,10 @@ class CombinedModel:
     def train(self, epochs=1, batch_size=None):
         self.trainedModel.train(epochs, batch_size)
 
+    def purge(self, seenStates):
+        self.basicModel.purge(seenStates)
+        self.trainedModel.purge(seenStates)
+
     def getMSE(self, clear=False):
         sum = 0
         count = 0
@@ -102,6 +107,8 @@ class TrainedModel:
                 optimizer=tf.train.AdamOptimizer(self.alpha),
                 loss='logcosh')
 
+    #uses the cached expValue if possible
+    #otherwise generates it, adds it to cache
     def getExpValue(self, stateHash=None, stateObj=None, action1=None, action2=None, bulk_input=None):
         if (stateHash, action1, action2) in self.expValueCache:
             return self.expValueCache[(stateHash, action1, action2)]
@@ -136,6 +143,10 @@ class TrainedModel:
         self.savedLabels = []
         self.expValueCache = {}
 
+    #this doesn't need to purge, as memory usage doesn't grow much
+    def purge(self, seenStates):
+        pass
+
     #Save and load need to save/load the idMap from modeInput
     def saveModel(self, name):
         pass
@@ -143,17 +154,24 @@ class TrainedModel:
     def loadModel(self, name):
         pass
 
+"""
 
 class BasicModel:
     def __init__(self):
         self.rewardTable = collections.defaultdict(int)
         self.countTable = collections.defaultdict(int)
+        #log holds a list of (stateHash, stateObj, action1, action2, reward) tuples
+        #so these can be written out at some point an analyzed
+        self.shouldLog = False
+        self.log = []
 
     #returns the actual average reward for the (s,a,a) tuple
     def getExpValue(self, stateHash=None, stateObj=None, action1=None, action2=None, bulk_input=None):
         if bulk_input:
             #have to make this look like it came out of tf
             return [[self.getExpValue(*b, bulk_input=None)] for b in bulk_input]
+        if self.shouldLog:
+            self.log.append((stateHash, stateObj, action1, action2, reward))
         cumReward = self.rewardTable[(stateHash, action1, action2)]
         count = self.countTable[(stateHash, action1, action2)]
         return None if count == 0 else cumReward / count
@@ -162,3 +180,11 @@ class BasicModel:
     def addReward(self, stateHash, stateObj, action1, action2, reward):
         self.rewardTable[(stateHash, action1, action2)] += reward
         self.countTable[(stateHash, action1, action2)] += 1
+
+    #removes information on states that haven't been seen
+    def purge(self, seenStates):
+        for key in self.rewardTable:
+            stateHash = key[0]
+            if not stateHash in seenStates:
+                del self.rewardTable[key]
+                del self.countTable[key]

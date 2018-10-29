@@ -346,7 +346,7 @@ def getExpValueExp3(mcData, state, actions, probs):
 
 
 #RM iteration
-async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, format, iter=0, initActions=[], initExpVal=0, posReg=True, probScaling=0, regScaling=0):
+async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, format, iter=0, initActions=[], pid=0, initExpVal=0, posReg=True, probScaling=0, regScaling=0):
 
     regretTable = mcData['regretTable']
     rewardTable = mcData['rewardTable']
@@ -362,8 +362,9 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
 
     #need to do it this way so
     #the other player has access to our history
-    mcData['history'] = []
-    history = mcData['history']
+    #need to keep histories for different processes separate
+    mcData['history' + str(pid)] = []
+    history = mcData['history' + str(pid)]
 
     #we're going to be popping off this
     initActions = copy.deepcopy(initActions)
@@ -436,7 +437,7 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
 
         elif request[0] == Game.END:
             #need to use the other player's actions
-            otherHistory = otherMcData['history']
+            otherHistory = otherMcData['history' + str(pid)]
 
             """
             expValueCache = {}
@@ -530,7 +531,7 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
 #initExpVal is the initial expected value. 0 and 0.5 both make sense
 #posReg is to enable only having 0 or positive regret
 async def mcSearchRM(ps, format, teams, mcData, limit=100,
-        seed=None, p1InitActions=[], p2InitActions=[], initExpVal=0, posReg=True, probScaling=0, regScaling=0):
+        seed=None, p1InitActions=[], p2InitActions=[], pid=0, initExpVal=0, posReg=True, probScaling=0, regScaling=0):
     #these are shared for both players
     #reward is for player 1, so player 2 should use 1-r
     rewardTable = collections.defaultdict(int)
@@ -574,14 +575,14 @@ async def mcSearchRM(ps, format, teams, mcData, limit=100,
                 mcRMImpl(game.p1Queue, game.cmdQueue,
                     ">p1", mcData=mcData[0],
                     otherMcData = mcData[1], format=format, iter=i,
-                    initActions=p1InitActions, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling, regScaling=regScaling),
+                    initActions=p1InitActions, pid=pid, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling, regScaling=regScaling),
                 mcRMImpl(game.p2Queue, game.cmdQueue,
                     ">p2", mcData=mcData[1],
                     otherMcData=mcData[0], format=format, iter=i,
-                    initActions=p2InitActions, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling, regScaling=regScaling))
+                    initActions=p2InitActions, pid=pid, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling, regScaling=regScaling))
     print(file=sys.stderr)
 
-def combineRMData(mcDatasets):
+def combineRMData(mcDatasets, valueModel=None):
     num = len(mcDatasets)
 
     #record which states were seen in the last iteration
@@ -591,6 +592,9 @@ def combineRMData(mcDatasets):
             seen = data[j]['seenStates']
             for state in seen:
                 seenStates[state] = True
+
+    if valueModel:
+        valueModel.purge(seenStates)
 
     if num == 1:
         #no need to copy data around, just delete it directly

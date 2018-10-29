@@ -307,7 +307,7 @@ async def playRandomGame(teams, format, ps=None):
 #plays two separately trained agents
 #I just copied and pasted playTestGame and duplicated all the search functions
 #so expect this to take twice as long as playTestGame with the same parameters
-async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses1=1, numProcesses2=1, file=sys.stdout, initMoves=([],[])):
+async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses1=1, numProcesses2=1, file=sys.stdout, initMoves=([],[]), valueModel1=None, valueModel2=None):
     try:
 
         mainPs = await getPSProcess()
@@ -330,13 +330,19 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
         getProbs1 = mc.getProbsRM
         combineData1 = mc.combineRMData
 
-        #mcSearch2 = mc.mcSearchRM
-        #getProbs2 = mc.getProbsRM
-        #combineData2 = mc.combineRMData
+        mcSearch2 = mc.mcSearchRM
+        getProbs2 = mc.getProbsRM
+        combineData2 = mc.combineRMData
 
-        mcSearch2 = mc.mcSearchExp3
-        getProbs2 = mc.getProbsExp3
-        combineData2 = mc.combineExp3Data
+        #mcSearch2 = mc.mcSearchExp3
+        #getProbs2 = mc.getProbsExp3
+        #combineData2 = mc.combineExp3Data
+
+
+        if not valueModel1:
+            valueModel1 = model.BasicModel()
+        if not valueModel2:
+            valueModel2 = model.BasicModel()
 
         #holds the montecarlo data
         #each entry goes to one process
@@ -353,24 +359,24 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
         def gamma2(iter):
             #return 1 / 2 ** (1 + 10 * iter / limit2)
             return 0.3
-        avgGamma1 = 0.3
-        avgGamma2 = 0.3
-        for i in range(numProcesses1):
-            mcDatasets1.append([{
-                'gamma': gamma1,
-                'avgGamma': avgGamma1,
-            }, {
-                'gamma': gamma1,
-                'avgGamma': avgGamma1,
-            }])
-        for i in range(numProcesses2):
-            mcDatasets2.append([{
-                'gamma': gamma2,
-                'avgGamma': avgGamma2,
-            }, {
-                'gamma': gamma2,
-                'avgGamma': avgGamma2,
-            }])
+        mcDatasets1 = [{
+            'gamma': gamma1,
+            'getExpValue': valueModel1.getExpValue,
+            'addReward': valueModel1.addReward,
+        }, {
+            'gamma': gamma1,
+            'getExpValue': valueModel1.getExpValue,
+            'addReward': valueModel1.addReward,
+        }]
+        mcDatasets2 = [{
+            'gamma': gamma2,
+            'getExpValue': valueModel2.getExpValue,
+            'addReward': valueModel2.addReward,
+        }, {
+            'gamma': gamma2,
+            'getExpValue': valueModel2.getExpValue,
+            'addReward': valueModel2.addReward,
+        }]
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03
@@ -407,7 +413,8 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                                 seed=seed,
                                 p1InitActions=p1Actions,
                                 p2InitActions=p2Actions,
-                                mcData=mcDatasets1[j],
+                                mcData=mcDatasets1,
+                                pid=j,
                                 posReg=True,
                                 initExpVal=0,
                                 probScaling=2,
@@ -423,11 +430,12 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                                 seed=seed,
                                 p1InitActions=p1Actions,
                                 p2InitActions=p2Actions,
-                                mcData=mcDatasets2[j])
-                                #posReg=True,
-                                #initExpVal=0.5,
-                                #probScaling=2,
-                                #regScaling=1.5)
+                                mcData=mcDatasets2,
+                                pid=j,
+                                posReg=True,
+                                initExpVal=0.5,
+                                probScaling=2,
+                                regScaling=1.5)
                         searches2.append(search2)
 
 
@@ -441,8 +449,8 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                     #it also takes a little bit of processing but that should be okay
                     print('combining', file=sys.stderr)
 
-                    mcDatasets1 = combineData1(mcDatasets1)
-                    mcDatasets2 = combineData2(mcDatasets2)
+                    mcDatasets1 = combineData1([mcDatasets1], valueModel1)[0]
+                    mcDatasets2 = combineData2([mcDatasets2], valueModel2)[0]
 
                 #this assumes that both player1 and player2 get requests each turn
                 #which I think is accurate, but most formats will give one player a waiting request
@@ -478,8 +486,10 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                     actionList.append(action)
                     await game.cmdQueue.put(cmdHeader + action)
 
-                await playTurn(game.p1Queue, [data[0] for data in mcDatasets1], p1Actions, '>p1', initMoves[0], getProbs1)
-                await playTurn(game.p2Queue, [data[1] for data in mcDatasets2], p2Actions, '>p2', initMoves[1], getProbs2)
+                #await playTurn(game.p1Queue, [data[0] for data in mcDatasets1], p1Actions, '>p1', initMoves[0], getProbs1)
+                #await playTurn(game.p2Queue, [data[1] for data in mcDatasets2], p2Actions, '>p2', initMoves[1], getProbs2)
+                await playTurn(game.p1Queue, [mcDatasets1[0]], p1Actions, '>p1', initMoves[0], getProbs1)
+                await playTurn(game.p2Queue, [mcDatasets2[1]], p2Actions, '>p2', initMoves[1], getProbs2)
 
         gameTask = asyncio.ensure_future(play())
         winner = await game.winner
@@ -573,25 +583,25 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
         #each entry goes to one process
         #this will get really big with n=3 after 20ish turns if you
         #don't purge old data
-        mcDatasets = []
+        #mcDatasets = []
 
         def gamma(iter):
             return 0.3
 
         if not valueModel:
-            valueModel = await trainModel(teams=teams, format=format, games=100, epochs=10)
-        #valueModel = model.BasicModel()
+            valueModel = model.BasicModel()
 
-        for i in range(numProcesses):
-            mcDatasets.append([{
-                'gamma': gamma,
-                'getExpValue': valueModel.getExpValue,
-                'addReward': valueModel.addReward,
-            }, {
-                'gamma': gamma,
-                'getExpValue': valueModel.getExpValue,
-                'addReward': valueModel.addReward,
-            }])
+        #for i in range(numProcesses):
+            #mcDatasets.append([{
+        mcDataset = [{
+            'gamma': gamma,
+            'getExpValue': valueModel.getExpValue,
+            'addReward': valueModel.addReward,
+        }, {
+            'gamma': gamma,
+            'getExpValue': valueModel.getExpValue,
+            'addReward': valueModel.addReward,
+        }]
 
 
         #moves with probabilites below this are not considered
@@ -607,7 +617,7 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
             p1Actions = []
             p2Actions = []
             #we reassign this later, so we have to declare it nonlocal
-            nonlocal mcDatasets
+            nonlocal mcDataset
             while True:
                 i += 1
                 print('starting turn', i, file=sys.stderr)
@@ -629,7 +639,8 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
                                 seed=seed,
                                 p1InitActions=p1Actions,
                                 p2InitActions=p2Actions,
-                                mcData=mcDatasets[j],
+                                mcData=mcDataset,
+                                pid=j,
                                 initExpVal=0,
                                 probScaling=2,
                                 regScaling=1.5)
@@ -643,7 +654,7 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
                     #it also takes a little bit of processing but that should be okay
                     print('combining', file=sys.stderr)
                     #mcDatasets = mc.combineExp3Data(mcDatasets)
-                    mcDatasets = mc.combineRMData(mcDatasets)
+                    mcDataset = mc.combineRMData([mcDataset], valueModel)[0]
 
                 #this assumes that both player1 and player2 get requests each turn
                 #which I think is accurate, but most formats will give one player a waiting request
@@ -709,8 +720,11 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
                     actionList.append(action)
                     await game.cmdQueue.put(cmdHeader + action)
 
-                await playTurn(game.p1Queue, [data[0] for data in mcDatasets], p1Actions, '>p1', initMoves[0])
-                await playTurn(game.p2Queue, [data[1] for data in mcDatasets], p2Actions, '>p2', initMoves[1])
+                #await playTurn(game.p1Queue, [data[0] for data in mcDatasets], p1Actions, '>p1', initMoves[0])
+                #await playTurn(game.p2Queue, [data[1] for data in mcDatasets], p2Actions, '>p2', initMoves[1])
+                await playTurn(game.p1Queue, [mcDataset[0]], p1Actions, '>p1', initMoves[0])
+                await playTurn(game.p2Queue, [mcDataset[1]], p2Actions, '>p2', initMoves[1])
+
 
         gameTask = asyncio.ensure_future(play())
         winner = await game.winner
@@ -732,12 +746,15 @@ async def getPSProcess():
             stdout=subprocess.PIPE)
 
 async def main():
+    format = '1v1'
+    #format = '2v2doubles'
+
     #teams = (singlesTeams[0], singlesTeams[1])
     #gen 1 starters mirror
-    #teams = (ovoTeams[4], ovoTeams[4])
+    teams = (ovoTeams[4], ovoTeams[4])
 
     #groudon vs lunala vgv19
-    teams = (tvtTeams[3], tvtTeams[4])
+    #teams = (tvtTeams[3], tvtTeams[4])
     #fini vs koko vgc17
     #teams = (tvtTeams[1], tvtTeams[5])
     #initMoves = ([' team 12'], [' team 12'])
@@ -746,48 +763,38 @@ async def main():
     #await playRandomGame(teams, format='1v1', ps=ps)
 
     #trainedModel = model.TrainedModel(alpha=0.0001)
-    basicModel = model.BasicModel()
+    #valueModel = model.BasicModel()
     #valueModel = model.CombinedModel(trainedModel, basicModel)
     #await trainModel(teams=teams, format='2v2doubles', games=100, epochs=100, valueModel=valueModel)
     #valueModel.compare = True
     #valueModel.t = 1
     #await humanGame(humanTeams, format='1v1', limit=300)
-    await playTestGame(teams, format='2v2doubles', limit=20000, numProcesses=1, initMoves=initMoves, valueModel=basicModel)
-    #print('mse', valueModel.getMSE(clear=True))
+    #await playTestGame(teams, format='2v2doubles', limit=3000, numProcesses=3, initMoves=initMoves, valueModel=valueModel)
+    #await playTestGame(teams, format='2v2doubles', limit=3000, numProcesses=3, initMoves=initMoves, valueModel=valueModel)
 
-    """
     limit1 = 1000
     numProcesses1 = 1
     limit2 = 1000
-    numProcesses2 = 1
+    numProcesses2 = 3
     bot1Wins = 0
     bot2Wins = 0
     #lunala mirror
-    #teams = (tvtTeams[4], tvtTeams[4])
-    #bot1 has is RM, bot2 is Exp3
+    teams = (tvtTeams[4], tvtTeams[4])
     for i in range(200):
+        valueModel1 = model.BasicModel()
+        valueModel2 = model.BasicModel()
         with open(os.devnull, 'w') as devnull:
-            result = await playCompGame(teams, format='1v1', limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, initMoves=initMoves, file=devnull)
+            result = await playCompGame(teams, format=format, limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, initMoves=initMoves, valueModel1=valueModel1, valueModel2=valueModel2, file=devnull)
         if result == 'bot1':
             bot1Wins += 1
         elif result == 'bot2':
             bot2Wins += 1
         print('bot1Wins', bot1Wins, 'bot2Wins', bot2Wins)
-    """
-
-    """
-    for i in range(100):
-    #1 is temp = 1, 2 is temp = 4
-    with open(os.devnull, 'w') as devnull:
-        result = await playCompGame(teams, format='1v1', limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, initMoves=initMoves, file=devnull)
-        print(result)
-    """
-
 
     """
     i = 0
     while True:
-        limit = 1000# * 2 ** i
+        limit = 1000 * 2 ** i
         print('starting game with limit', limit, file=sys.stderr)
         with open('iterout' + str(i) + '.txt', 'w') as file:
             await playTestGame(teams, format='2v2doubles', limit=limit, valueModel=valueModel, numProcesses=1, initMoves=initMoves, file=file)
