@@ -491,33 +491,7 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
                         normProbs = normProbs / np.sum(normProbs)
 
                         for j in range(len(actions)):
-                            action = actions[j].split(',')
-                            actionText = []
-                            for k in range(len(action)):
-                                a = action[k]
-                                a = a.strip()
-                                if 'pass' in a:
-                                    actionText.append('pass')
-                                elif 'move' in a:
-                                    parts = a.split(' ')
-                                    moveNum = int(parts[1])
-                                    if len(parts) < 3:
-                                        targetNum = 0
-                                    else:
-                                        targetNum = int(parts[2])
-                                    move = request[1]['active'][k]['moves'][moveNum-1]['move']
-                                    if targetNum != 0:
-                                        actionText.append(move + ' into slot ' + str(targetNum))
-                                    else:
-                                        actionText.append(move)
-                                elif 'team' in a:
-                                    actionText.append(a)
-                                elif 'switch' in a:
-                                    #TODO
-                                    actionText.append(a)
-                                else:
-                                    actionText.append('unknown action: ' + a)
-                            actionString = ','.join(actionText)
+                            actionString = moves.prettyPrintMove(actions[j], request[1])
                             if normProbs[j] > 0:
                                 print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actionString,
                                         'prob:', '%.1f%%' % (normProbs[j] * 100), file=file)
@@ -567,7 +541,7 @@ async def main():
     #fini vs koko vgc17
     #teams = (tvtTeams[1], tvtTeams[5])
 
-    #scarf kyogre mirror
+    #vgc19 scarf kyogre mirror
     teams = (vgcTeams[0], vgcTeams[0])
 
     #initMoves = ([' team 12'], [' team 12'])
@@ -590,7 +564,7 @@ async def main():
     #valueModel.compare = True
     #valueModel.t = 1
     #await humanGame(humanTeams, format='1v1', limit=300)
-    await playTestGame(teams, format=format, limit=100, numProcesses=1, initMoves=initMoves)
+    await playTestGame(teams, format=format, limit=1000, numProcesses=3, initMoves=initMoves)
 
     """
     limit1 = 1000

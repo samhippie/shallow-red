@@ -135,10 +135,12 @@ def getMovesImpl(format, req):
                         actions.append('move ' + str(j+1) + ' ' + target)
 
             #pick the possible switching targets
-            for j in range(len(req['side']['pokemon'])):
-                mon = req['side']['pokemon'][j]
-                if not mon['active'] and not mon['condition'] == '0 fnt':
-                    actions.append('switch ' + str(j+1))
+            #TODO check how this works with shadow tag etc
+            if not 'trapped' in req['active'][i]:
+                for j in range(len(req['side']['pokemon'])):
+                    mon = req['side']['pokemon'][j]
+                    if not mon['active'] and not mon['condition'] == '0 fnt':
+                        actions.append('switch ' + str(j+1))
 
 
         actions = []
@@ -152,4 +154,38 @@ def getMovesImpl(format, req):
                 actions.append(' ' + ','.join(set))
         return actions
 
+
+def prettyPrintMove(jointAction, req):
+    action = jointAction.split(',')
+    actionText = []
+    for k in range(len(action)):
+        a = action[k]
+        a = a.strip()
+        if 'pass' in a:
+            actionText.append('pass')
+        elif 'move' in a:
+            parts = a.split(' ')
+            moveNum = int(parts[1])
+            if len(parts) < 3:
+                targetNum = 0
+            else:
+                targetNum = int(parts[2])
+            move = req['active'][k]['moves'][moveNum-1]['move']
+            if targetNum != 0:
+                actionText.append(move + ' into slot ' + str(targetNum))
+            else:
+                actionText.append(move)
+        elif 'team' in a:
+            actionText.append(a)
+        elif 'switch' in a:
+            targetNum = int(a.strip().split(' ')[1])
+            mon = req['side']['pokemon'][targetNum-1]
+            actionText.append('switch to ' + mon['details'])
+        elif 'noop' in a:
+            actionText.append('wait')
+        else:
+            actionText.append('unknown action: ' + a)
+    actionString = ','.join(actionText)
+
+    return actionString
 
