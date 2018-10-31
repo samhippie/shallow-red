@@ -346,7 +346,7 @@ def getExpValueExp3(mcData, state, actions, probs):
 
 
 #RM iteration
-async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, format, iter=0, initActions=[], pid=0, initExpVal=0, posReg=True, probScaling=0, regScaling=0):
+async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, format, iter=0, initActions=[], pid=0, initExpVal=0, posReg=True, probScaling=0, regScaling=0, verbose=False):
 
     regretTable = mcData['regretTable']
     rewardTable = mcData['rewardTable']
@@ -373,6 +373,8 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
     inInitActions = True
     while running:
         request = await requestQueue.get()
+        if verbose:
+            print(cmdHeader, request)
 
         if request[0] == Game.REQUEST or request[0] == Game.ERROR:
             req = request[1]
@@ -419,7 +421,7 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
 
             if len(initActions) > 0:
                 #blindly pick init action
-                preAction = initActions[0]
+                preAction = initActions[0].strip()
                 #find close enough action in list
                 #PS client will generate team preview actions that
                 #are longer than what we expect, but we can just
@@ -438,6 +440,9 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
 
             #save our action
             history.append((state, stateObj, bestActionIndex, actions, probs))
+
+            if verbose:
+                print('picked', cmdHeader + bestAction)
 
             #prevAction = bestAction
             #prevState = state
@@ -540,7 +545,8 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
 #initExpVal is the initial expected value. 0 and 0.5 both make sense
 #posReg is to enable only having 0 or positive regret
 async def mcSearchRM(ps, format, teams, mcData, limit=100,
-        seed=None, p1InitActions=[], p2InitActions=[], pid=0, initExpVal=0, posReg=True, probScaling=0, regScaling=0):
+        seed=None, p1InitActions=[], p2InitActions=[], pid=0,
+        initExpVal=0, posReg=True, probScaling=0, regScaling=0, verbose=False):
     #these are shared for both players
     #reward is for player 1, so player 2 should use 1-r
     rewardTable = collections.defaultdict(int)
@@ -578,17 +584,19 @@ async def mcSearchRM(ps, format, teams, mcData, limit=100,
     print(end='', file=sys.stderr)
     for i in range(limit):
         print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
-        game = Game(ps, teams, format=format, seed=seed, verbose=False)
+        game = Game(ps, teams, format=format, seed=seed, verbose=verbose)
         await game.startGame()
         await asyncio.gather(
                 mcRMImpl(game.p1Queue, game.cmdQueue,
                     ">p1", mcData=mcData[0],
                     otherMcData = mcData[1], format=format, iter=i,
-                    initActions=p1InitActions, pid=pid, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling, regScaling=regScaling),
+                    initActions=p1InitActions, pid=pid, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling, regScaling=regScaling,
+                    verbose=verbose),
                 mcRMImpl(game.p2Queue, game.cmdQueue,
                     ">p2", mcData=mcData[1],
                     otherMcData=mcData[0], format=format, iter=i,
-                    initActions=p2InitActions, pid=pid, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling, regScaling=regScaling))
+                    initActions=p2InitActions, pid=pid, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling, regScaling=regScaling,
+                    verbose=verbose))
     print(file=sys.stderr)
 
 def combineRMData(mcDatasets, valueModel=None):

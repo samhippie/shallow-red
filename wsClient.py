@@ -120,7 +120,7 @@ class SocketReceiver:
 
 #assumes we're in one battle at a time
 async def doBattle(ws, sr):
-    player = InteractivePlayer(teams, limit=100, numProcesses=1, format='1v1')
+    player = InteractivePlayer(teams, limit=300, numProcesses=3, format='1v1')
     async def gameLoop():
         hasSentMessage = False
         while True:
@@ -147,7 +147,8 @@ async def main():
     user, passwd = getLogin()
     #connect to our modified server
     print('connecting')
-    async with websockets.connect('ws://localhost:8000/showdown/websocket') as websocket:
+    #async with websockets.connect('ws://localhost:8000/showdown/websocket') as websocket:
+    async with websockets.connect('ws://debian:8000/showdown/websocket') as websocket:
         print('starting')
         sr = SocketReceiver(websocket)
         await sr.startLoop()

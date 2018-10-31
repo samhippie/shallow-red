@@ -24,6 +24,12 @@ humanTeams = [
 
 ]
 
+vgcTeams = [
+
+    '|salazzle|focussash||protect,flamethrower,sludgebomb,fakeout|Timid|,,,252,,252||||50|]|kyogre|choicescarf||waterspout,originpulse,scald,icebeam|Modest|4,,,252,,252||,0,,,,||50|]|tapulele|lifeorb||psychic,moonblast,dazzlinggleam,protect|Modest|4,,,252,,252||,0,,,,||50|]|incineroar|figyberry|H|flareblitz,knockoff,uturn,fakeout|Adamant|236,4,4,,236,28|M|||50|]|lunala|spookyplate||moongeistbeam,psyshock,tailwind,protect|Timid|4,,,252,,252||,0,,,,||50|]|toxicroak|assaultvest|1|poisonjab,lowkick,fakeout,feint|Adamant|148,108,4,,244,4|F|||50|',
+
+]
+
 #1v1 teams in packed format
 ovoTeams = [
     '|mimikyu|mimikiumz||willowisp,playrough,swordsdance,shadowsneak|Jolly|240,128,96,,,44|||||]|zygarde|groundiumz|H|thousandarrows,coil,substitute,rockslide|Impish|248,12,248,,,|||||]|volcarona|buginiumz|H|bugbuzz,quiverdance,substitute,overheat|Timid|,,52,224,,232||,0,,,,|||',
@@ -64,209 +70,6 @@ tvtTeams = [
 PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
 PS_ARG = 'simulate-battle'
 
-#used to play a game with the user
-#assumes RM, so no parallelism
-#human is p1, bot is p2
-async def humanGame(teams, limit=100, format='1v1', valueModel=None, file=sys.stdout, initMoves=([],[])):
-    try:
-
-        mainPs = await getPSProcess()
-
-        searchPs = await getPSProcess()
-
-        seed = [
-            random.random() * 0x10000,
-            random.random() * 0x10000,
-            random.random() * 0x10000,
-            random.random() * 0x10000,
-        ]
-
-        game = Game(mainPs, format=format, teams=teams, seed=seed, names=['meat sack', 'Your Robot Overlords'], verbose=True, file=file)
-
-
-
-        #holds the montecarlo data
-        #each entry goes to one process
-        #this will get really big with n=3 after 20ish turns if you
-        #don't purge old data
-        mcData = []
-
-        def gamma(iter):
-            return 0.3
-
-        if not valueModel:
-            valueModel = model.BasicModel()
-        #valueModel = model.BasicModel()
-
-        mcData = [{
-            'gamma': gamma,
-            'getExpValue': valueModel.getExpValue,
-            'addReward': valueModel.addReward,
-        }, {
-            'gamma': gamma,
-            'getExpValue': valueModel.getExpValue,
-            'addReward': valueModel.addReward,
-        }]
-
-
-        #moves with probabilites below this are not considered
-        probCutoff = 0.03
-
-        await game.startGame()
-
-        #this needs to be a coroutine so we can cancel it when the game ends
-        #which due to concurrency issues might not be until we get into the MCTS loop
-        async def play():
-            i = 0
-            #actions taken so far by in the actual game
-            p1Actions = []
-            p2Actions = []
-            #we reassign this later, so we have to declare it nonlocal
-            nonlocal mcData
-            while True:
-                i += 1
-                print('starting turn', i, file=sys.stderr)
-
-                #don't search if we aren't going to use the results
-                if len(initMoves[0]) == 0 or len(initMoves[1]) == 0:
-                    #I suspect that averaging two runs together will
-                    #give us more improvement than running for twice as long
-                    #and it should run faster than a single long search due to parallelism
-
-                    search = mc.mcSearchRM(
-                            searchPs,
-                            format,
-                            teams,
-                            limit=limit,
-                            seed=seed,
-                            p1InitActions=p1Actions,
-                            p2InitActions=p2Actions,
-                            mcData=mcData,
-                            initExpVal=0,
-                            probScaling=2,
-                            regScaling=1.5)
-
-                    await search
-
-                    #combine the processes results together, purge unused information
-                    #this assumes that any state that isn't seen in two consecutive iterations isn't worth keeping
-                    #it also takes a little bit of processing but that should be okay
-                    print('combining', file=sys.stderr)
-                    mcData = mc.combineRMData([mcData])[0]
-
-                #this assumes that both player1 and player2 get requests each turn
-                #which I think is accurate, but most formats will give one player a waiting request
-                #this will lock up if a player causes an error, so don't do that
-
-                async def playTurn(queue, myMcData, actionList, cmdHeader, initMoves):
-
-                    request = await queue.get()
-
-                    if len(initMoves) > 0:
-                        action = initMoves[0]
-                        del initMoves[0]
-                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' pre-set action:', action, file=file)
-                    else:
-                        #figure out what kind of action we need
-                        state = request[1]['stateHash']
-                        actions = moves.getMoves(format, request[1])
-
-                        #the mcdatasets are all combined, so we can just look at the first
-                        data = myMcData[0]
-                        #probs = mc.getProbsExp3(data, state, actions)
-                        probs = mc.getProbsRM(data, state, actions)
-                        #remove low probability moves, likely just noise
-                        #this can remove every action, but if that's the case then it's doesn't really matter
-                        #as all the probabilites are low
-                        normProbs = np.array([p if p > probCutoff else 0 for p in probs])
-                        normProbs = normProbs / np.sum(normProbs)
-
-                        action = np.random.choice(actions, p=normProbs)
-
-                    actionList.append(action)
-                    await game.cmdQueue.put(cmdHeader + action)
-
-                async def userTurn(queue, actionList, cmdHeader, initMoves):
-
-                    request = await queue.get()
-
-                    if len(initMoves) > 0:
-                        action = initMoves[0]
-                        del initMoves[0]
-                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' pre-set action:', action, file=file)
-                    else:
-                        #figure out what kind of action we need
-                        state = request[1]['stateHash']
-                        actions = moves.getMoves(format, request[1])
-
-
-                        actionTexts = []
-                        for j in range(len(actions)):
-                            action = actions[j].split(',')
-                            actionText = []
-                            for k in range(len(action)):
-                                a = action[k]
-                                a = a.strip()
-                                if 'pass' in a:
-                                    actionText.append('pass')
-                                elif 'move' in a:
-                                    parts = a.split(' ')
-                                    moveNum = int(parts[1])
-                                    if len(parts) < 3:
-                                        targetNum = 0
-                                    else:
-                                        targetNum = int(parts[2])
-                                    move = request[1]['active'][k]['moves'][moveNum-1]['move']
-                                    if targetNum != 0:
-                                        actionText.append(move + ' into slot ' + str(targetNum))
-                                    else:
-                                        actionText.append(move)
-                                elif 'team' in a:
-                                    actionText.append(a)
-                                elif 'switch' in a:
-                                    actionText.append(a)
-                                else:
-                                    actionText.append('unknown action: ' + a)
-                            actionString = ','.join(actionText)
-                            actionTexts.append(actionString)
-
-
-                        #ask the user which action to take
-                        print('Legal actions:')
-                        for j in range(len(actions)):
-                            print(j, actionTexts[j], '(' + actions[j] + ')')
-                        #humans are dumb and make mistakes
-                        while True:
-                            try:
-                                actionIndex = int(input('Your action:'))
-                                if actionIndex >= 0 and actionIndex < len(actions):
-                                    action = actions[actionIndex]
-                                    break
-                            except ValueException:
-                                pass
-                            print('try again')
-
-                        actionList.append(action)
-
-                        await game.cmdQueue.put(cmdHeader + action)
-
-
-                await userTurn(game.p1Queue, p1Actions, '>p1', initMoves[0])
-                await playTurn(game.p2Queue, mcData, p2Actions, '>p2', initMoves[1])
-
-        gameTask = asyncio.ensure_future(play())
-        winner = await game.winner
-        gameTask.cancel()
-        print('winner:', winner, file=sys.stderr)
-
-    except Exception as e:
-        print(e, file=sys.stderr)
-
-    finally:
-        mainPs.terminate()
-        searchPs.terminate()
-
-
 async def playRandomGame(teams, format, ps=None):
     if not ps:
         ps = await getPSProcess()
@@ -285,10 +88,10 @@ async def playRandomGame(teams, format, ps=None):
             if req[0] == Game.END:
                 break
 
+            print('getting actions')
             actions = moves.getMoves(format, req[1])
             state = req[1]['state']
-            print('getting state tensor')
-            #print(cmdHeader, 'actions', actions)
+            print(cmdHeader, 'actions', actions)
 
             action = random.choice(actions)
             print(cmdHeader, 'picked', action)
@@ -556,6 +359,9 @@ async def trainModel(teams, format, games=100, epochs=100, valueModel=None):
             print('epoch', i, 'training', file=sys.stderr)
             valueModel.train(epochs=10)
 
+    except:
+        raise
+
     finally:
         searchPs.terminate()
     return valueModel
@@ -643,7 +449,8 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
                                 pid=j,
                                 initExpVal=0,
                                 probScaling=2,
-                                regScaling=1.5)
+                                regScaling=1.5,
+                                verbose=False)
                         searches.append(search)
 
 
@@ -731,8 +538,8 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
         gameTask.cancel()
         print('winner:', winner, file=sys.stderr)
 
-    except Exception as e:
-        print(e, file=sys.stderr)
+    except:
+        raise
 
     finally:
         mainPs.terminate()
@@ -746,21 +553,35 @@ async def getPSProcess():
             stdout=subprocess.PIPE)
 
 async def main():
-    format = '1v1'
+    #format = '1v1'
     #format = '2v2doubles'
+    #format='singles'
+    format='vgc'
 
     #teams = (singlesTeams[0], singlesTeams[1])
     #gen 1 starters mirror
-    teams = (ovoTeams[4], ovoTeams[4])
+    #teams = (ovoTeams[4], ovoTeams[4])
 
     #groudon vs lunala vgv19
     #teams = (tvtTeams[3], tvtTeams[4])
     #fini vs koko vgc17
     #teams = (tvtTeams[1], tvtTeams[5])
+
+    #scarf kyogre mirror
+    teams = (vgcTeams[0], vgcTeams[0])
+
     #initMoves = ([' team 12'], [' team 12'])
     #initMoves = ([' team 1'], [' team 1'])
     initMoves = ([], [])
-    #await playRandomGame(teams, format='1v1', ps=ps)
+
+    """
+    ps = await getPSProcess()
+    try:
+        await playRandomGame(teams, format=format, ps=ps)
+    finally:
+        ps.terminate()
+    """
+
 
     #trainedModel = model.TrainedModel(alpha=0.0001)
     #valueModel = model.BasicModel()
@@ -769,9 +590,9 @@ async def main():
     #valueModel.compare = True
     #valueModel.t = 1
     #await humanGame(humanTeams, format='1v1', limit=300)
-    #await playTestGame(teams, format='2v2doubles', limit=3000, numProcesses=3, initMoves=initMoves, valueModel=valueModel)
-    #await playTestGame(teams, format='2v2doubles', limit=3000, numProcesses=3, initMoves=initMoves, valueModel=valueModel)
+    await playTestGame(teams, format=format, limit=100, numProcesses=1, initMoves=initMoves)
 
+    """
     limit1 = 1000
     numProcesses1 = 1
     limit2 = 1000
@@ -790,6 +611,7 @@ async def main():
         elif result == 'bot2':
             bot2Wins += 1
         print('bot1Wins', bot1Wins, 'bot2Wins', bot2Wins)
+    """
 
     """
     i = 0

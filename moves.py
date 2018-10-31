@@ -5,39 +5,6 @@ import sys
 
 from game import Game
 
-def getSwitchSet(format):
-    switches = []
-    if format == 'singles':
-        for i in range(6):
-            switches.append(' switch ' + str(i+1))
-    return switches
-
-def getMoveSet(format):
-    moves = []
-    if format == '1v1' or format == 'singles':
-        for i in range(4):
-            #for extra in ['', ' mega', ' zmove']:
-            for extra in ['']:
-                moves.append(' move ' + str(i+1) + extra)
-    return moves + getSwitchSet(format)
-
-def getTeamSet(format):
-    teams = []
-    if format == '1v1':
-        for i in range(3):
-            teams.append(' team ' + str(i+1))
-    elif format == 'singles':
-        for i in range(6):
-            team = []
-            for j in range(6):
-                mon = (i + j) % 6
-                team.append(str(mon + 1))
-            teams.append(' team ' + ''.join(team))
-    return teams
-
-def getWaitSet(format):
-    return [' noop']
-
 #checks if the group of mons is valid and canonical
 #which means no duplicates, must be in ascending order
 def checkTeamSet(set):
@@ -81,6 +48,8 @@ def makeTeams(numMons, teamSize, numInFront):
 #maps (format, str(req)) => actions
 actionCache = {}
 
+doublesFormats = ['doubles', '2v2doubles', '2v2', 'vgc']
+
 #using the cache seems to be a little bit faster in tests
 #1000 games 1v1 went from 43s to 40s
 def getMoves(format, req):
@@ -91,16 +60,14 @@ def getMoves(format, req):
 
 #this takes the req as a dict
 #this works for anything that doesn't require switching
-#TODO fix this so it works with regularsingles too
 def getMovesImpl(format, req):
     if 'wait' in req:
         return [' noop']
     elif 'teamPreview' in req:
-        #if format in teamCache:
-            #return teamCache[format]
         numMons = len(req['side']['pokemon'])
-        teamSize = req['maxTeamSize']
-        if format == '2v2doubles':
+        #can only bring however many mons you have
+        teamSize = min(req['maxTeamSize'], numMons)
+        if format in doublesFormats:
             numInFront = 2
         else:
             numInFront = 1
@@ -108,11 +75,37 @@ def getMovesImpl(format, req):
         #teamCache[format] = teams
         return teams
     elif 'forceSwitch' in req:
-        #impossible in 2v2
-        pass
-    elif 'active' in req:
-        #TODO benchmark this to see if caching helps
+        #holds the possible actions for each active slot
+        actionSets = []
+        for i in range(len(req['forceSwitch'])):
+            actions = []
+            actionSets.append(actions)
+            if not req['forceSwitch'][i]:
+                actions.append('pass')
+            else:
+                #pick the possible switching targets
+                for j in range(len(req['side']['pokemon'])):
+                    mon = req['side']['pokemon'][j]
+                    if not mon['active'] and not mon['condition'] == '0 fnt':
+                        actions.append('switch ' + str(j+1))
+        actions = []
+        #cartesian product of the elements of the action sets
+        actionCross = np.array(np.meshgrid(*actionSets)).T.reshape(-1, len(actionSets))
+        for set in actionCross:
+            #check if multiple actions switch to the same mon
+            switchTargets = [int(a.split(' ')[1]) for a in set if 'switch' in a]
+            _,  counts = np.unique(switchTargets, return_counts=True)
+            if not any(counts > 1):
+                actions.append(' ' + ','.join(set))
+            elif len(actionCross) == 1:#only one mon left
+                #need to pass some of the switches
+                #the proper way is to replace all duplicates with a pass
+                #I'm just going to hard code this for doubles
+                actions.append(' ' + set[0] + ',pass')
+            # else: it's just an illegal action
+        return actions
 
+    elif 'active' in req:
         #holds the possible actions for each active slot
         actionSets = []
         for i in range(len(req['active'])):
@@ -123,43 +116,40 @@ def getMovesImpl(format, req):
             actions = actionSets[i]
             mon = req['side']['pokemon'][i]
             if mon['condition'] == '0 fnt':
-                actions.append(' pass')
+                actions.append('pass')
             else:
                 moves = req['active'][i]['moves']
                 for j in range(len(moves)):
                     move = moves[j]
                     if ('disabled' in move and move['disabled']) or ('pp' in move and move['pp'] == 0):
                         continue
-                    if format != '2v2doubles' or 'target' not in move:
+                    if format not in doublesFormats or 'target' not in move:
                         targets = ['']
-                    elif move['target'] == 'allySide':
-                        targets = ['-1' if i == 1 else '-2']
-                    elif move['target'] in ['all', 'self', 'allAdjacentFoes', 'allAdjacent', 'randomNormal']:
+                    #elif move['target'] == 'allySide':
+                        #targets = ['-1' if i == 1 else '-2']
+                    elif move['target'] in ['all', 'self', 'allAdjacentFoes', 'allAdjacent', 'randomNormal', 'foeSide', 'allySide']:
                         targets = ['']
-                    elif move['target'] == 'normal':
+                    elif move['target'] in ['normal', 'any']:
                         targets = ['-1' if i == 1 else '-2', '1', '2']
                     for target in targets:
                         actions.append('move ' + str(j+1) + ' ' + target)
+
+            #pick the possible switching targets
+            for j in range(len(req['side']['pokemon'])):
+                mon = req['side']['pokemon'][j]
+                if not mon['active'] and not mon['condition'] == '0 fnt':
+                    actions.append('switch ' + str(j+1))
+
+
         actions = []
         #cartesian product of the elements of the action sets
         actionCross = np.array(np.meshgrid(*actionSets)).T.reshape(-1, len(actionSets))
         for set in actionCross:
-            actions.append(' ' + ','.join(set))
+            #check if multiple actions switch to the same mon
+            switchTargets = [int(a.split(' ')[1]) for a in set if 'switch' in a]
+            _,  counts = np.unique(switchTargets, return_counts=True)
+            if not any(counts > 1):
+                actions.append(' ' + ','.join(set))
         return actions
 
 
-#easiest way to get moves for a state
-"""
-def getMoves(format, req):
-    if req == Game.REQUEST_TEAM:
-        return getTeamSet(format)
-
-    elif req == Game.REQUEST_TURN:
-        return getMoveSet(format)
-
-    elif req == Game.REQUEST_SWITCH:
-        return getSwitchSet(format)
-
-    elif req == Game.REQUEST_WAIT:
-        return getWaitSet(format)
-"""

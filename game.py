@@ -65,6 +65,8 @@ class Game:
             psFormat = 'anythinggoes'
         elif self.format == '2v2':
             psFormat = '2v2doubles'
+        elif self.format == 'vgc':
+            psFormat = 'vgc2019sunseries'
         else:
             psFormat = self.format
 
