@@ -14,8 +14,9 @@ import moves
 from game import Game
 import model
 import modelInput
-import montecarlo.rm as rm
 import montecarlo.exp3 as exp3
+import montecarlo.rm as rm
+import montecarlo.oos as oos
 
 humanTeams = [
 
@@ -403,12 +404,12 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
             #mcDatasets.append([{
         mcDataset = [{
             'gamma': gamma,
-            'getExpValue': valueModel.getExpValue,
-            'addReward': valueModel.addReward,
+            #'getExpValue': valueModel.getExpValue,
+            #'addReward': valueModel.addReward,
         }, {
             'gamma': gamma,
-            'getExpValue': valueModel.getExpValue,
-            'addReward': valueModel.addReward,
+            #'getExpValue': valueModel.getExpValue,
+            #'addReward': valueModel.addReward,
         }]
 
 
@@ -439,7 +440,7 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
                     searches = []
                     for j in range(numProcesses):
                         #search = exp3.mcSearchExp3(
-                        search = rm.mcSearchRM(
+                        search = oos.mcSearchOOS(
                                 searchPs[j],
                                 format,
                                 teams,
@@ -448,10 +449,10 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
                                 p1InitActions=p1Actions,
                                 p2InitActions=p2Actions,
                                 mcData=mcDataset,
-                                pid=j,
-                                initExpVal=0,
-                                probScaling=2,
-                                regScaling=1.5,
+                                #pid=j,
+                                #initExpVal=0,
+                                #probScaling=2,
+                                #regScaling=1.5,
                                 verbose=False)
                         searches.append(search)
 
@@ -463,7 +464,7 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
                     #it also takes a little bit of processing but that should be okay
                     print('combining', file=sys.stderr)
                     #mcDatasets = exp3.combineExp3Data(mcDatasets)
-                    mcDataset = rm.combineRMData([mcDataset], valueModel)[0]
+                    mcDataset = oos.combineOOSData([mcDataset])[0]
 
                 #this assumes that both player1 and player2 get requests each turn
                 #which I think is accurate, but most formats will give one player a waiting request
@@ -485,7 +486,7 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
                         #the mcdatasets are all combined, so we can just look at the first
                         data = myMcData[0]
                         #probs = exp3.getProbsExp3(data, state, actions)
-                        probs = rm.getProbsRM(data, state, actions)
+                        probs = oos.getProbsOOS(data, state, actions)
                         #remove low probability moves, likely just noise
                         #this can remove every action, but if that's the case then it's doesn't really matter
                         #as all the probabilites are low
@@ -566,16 +567,17 @@ async def main():
     """
 
 
-    trainedModel = model.TrainedModel(alpha=0.0001)
+    #trainedModel = model.TrainedModel(alpha=0.0001)
     #valueModel = model.BasicModel()
     #valueModel = model.CombinedModel(trainedModel, basicModel)
     #await trainModel(teams=teams, format=format, games=100, epochs=100, valueModel=trainedModel)
-    trainedModel.training = False
+    #trainedModel.training = False
     #valueModel.compare = True
     #valueModel.t = 1
     #await humanGame(humanTeams, format='1v1', limit=300)
-    #await playTestGame(teams, format=format, limit=3000, numProcesses=3, initMoves=initMoves)
+    await playTestGame(teams, format=format, limit=1000, numProcesses=1, initMoves=initMoves)
 
+    """
     limit1 = 100
     numProcesses1 = 1
     limit2 = 300
@@ -593,6 +595,7 @@ async def main():
         elif result == 'bot2':
             bot2Wins += 1
         print('bot1Wins', bot1Wins, 'bot2Wins', bot2Wins)
+    """
 
     """
     i = 0
