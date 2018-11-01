@@ -272,7 +272,7 @@ async def mcSearchExp3(ps, format, teams, mcData, limit=100,
                     initActions=p2InitActions))
     print(file=sys.stderr)
 
-def combineExp3Data(mcDatasets):
+def combineExp3Data(mcDatasets, valueModel=None):
     num = len(mcDatasets)
     #record which states were seen in the last iteration
     seenStates = {}
@@ -281,6 +281,21 @@ def combineExp3Data(mcDatasets):
             seen = data[j]['seenStates']
             for state in seen:
                 seenStates[state] = True
+
+    if valueModel:
+        valueModel.purge(seenStates)
+
+    if num == 1:
+        for data in mcDatasets:
+            for j in range(2):
+                countTable = data[j]['countTable']
+                expValueTable = data[j]['expValueTable']
+                for state, action in countTable:
+                    if state not in seenStates:
+                        del countTable[(state, action)]
+                        del expValueTable[(state, action)]
+        return mcDatasets
+
 
     #combine data on states that were seen in any search
     #in the last iteration

@@ -63,6 +63,8 @@ tvtTeams = [
     '|lunala|spookyplate||moongeistbeam,psyshock,psychup,protect|Timid|4,,,252,,252||,0,,,,||50|]|incineroar|figyberry|H|flareblitz,knockoff,uturn,fakeout|Adamant|236,4,4,,236,28|M|||50|',
 
     '|kartana|assaultvest||leafblade,smartstrike,sacredsword,nightslash|Jolly|204,4,4,,84,212||||50|]|tapukoko|choicespecs||thunderbolt,dazzlinggleam,discharge,voltswitch|Timid|140,,36,204,28,100||,0,,,,||50|',
+
+    '|tapulele|choicespecs||thunderbolt,psychic,moonblast,dazzlinggleam|Modest|252,,,252,,||,0,,,,||50|]|kartana|focussash||detect,leafblade,sacredsword,smartstrike|Jolly|,252,,,4,252||||50|'
 ]
 
 
@@ -133,13 +135,13 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
         getProbs1 = mc.getProbsRM
         combineData1 = mc.combineRMData
 
-        mcSearch2 = mc.mcSearchRM
-        getProbs2 = mc.getProbsRM
-        combineData2 = mc.combineRMData
+        #mcSearch2 = mc.mcSearchRM
+        #getProbs2 = mc.getProbsRM
+        #combineData2 = mc.combineRMData
 
-        #mcSearch2 = mc.mcSearchExp3
-        #getProbs2 = mc.getProbsExp3
-        #combineData2 = mc.combineExp3Data
+        mcSearch2 = mc.mcSearchExp3
+        getProbs2 = mc.getProbsExp3
+        combineData2 = mc.combineExp3Data
 
 
         if not valueModel1:
@@ -184,7 +186,6 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
         #moves with probabilites below this are not considered
         probCutoff = 0.03
 
-        print('|c|server|bot1 uses RM with game limit', limit1, 'x', numProcesses1, ', bot 2 uses Exp3 with game limit', limit2, 'x', numProcesses2, file=file)
         #this needs to be a coroutine so we can cancel it when the game ends
         #which due to concurrency issues might not be until we get into the MCTS loop
         async def play():
@@ -233,12 +234,12 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                                 seed=seed,
                                 p1InitActions=p1Actions,
                                 p2InitActions=p2Actions,
-                                mcData=mcDatasets2,
-                                pid=j,
-                                posReg=True,
-                                initExpVal=0.5,
-                                probScaling=2,
-                                regScaling=1.5)
+                                mcData=mcDatasets2)#,
+                                #pid=j,
+                                #posReg=True,
+                                #initExpVal=0.5,
+                                #probScaling=2,
+                                #regScaling=1.5)
                         searches2.append(search2)
 
 
@@ -353,8 +354,8 @@ async def trainModel(teams, format, games=100, epochs=100, valueModel=None):
                     #p2InitActions=p2Actions,
                     mcData=mcData,
                     initExpVal=0,
-                    probScaling=0,
-                    regScaling=0)
+                    probScaling=2,
+                    regScaling=1.5)
 
             print('epoch', i, 'training', file=sys.stderr)
             valueModel.train(epochs=10)
@@ -527,14 +528,14 @@ async def getPSProcess():
             stdout=subprocess.PIPE)
 
 async def main():
-    #format = '1v1'
+    format = '1v1'
     #format = '2v2doubles'
     #format='singles'
-    format='vgc'
+    #format='vgc'
 
     #teams = (singlesTeams[0], singlesTeams[1])
     #gen 1 starters mirror
-    #teams = (ovoTeams[4], ovoTeams[4])
+    teams = (ovoTeams[4], ovoTeams[4])
 
     #groudon vs lunala vgv19
     #teams = (tvtTeams[3], tvtTeams[4])
@@ -542,7 +543,14 @@ async def main():
     #teams = (tvtTeams[1], tvtTeams[5])
 
     #vgc19 scarf kyogre mirror
-    teams = (vgcTeams[0], vgcTeams[0])
+    #teams = (vgcTeams[0], vgcTeams[0])
+
+    #lunala mirror
+    #teams = (tvtTeams[4], tvtTeams[4])
+
+    #salazzle/fini vs lele/kartana singles
+    #teams = (tvtTeams[1], tvtTeams[6])
+    #initMoves = ([' team 21'], [' team 12'])
 
     #initMoves = ([' team 12'], [' team 12'])
     #initMoves = ([' team 1'], [' team 1'])
@@ -557,27 +565,26 @@ async def main():
     """
 
 
-    #trainedModel = model.TrainedModel(alpha=0.0001)
+    trainedModel = model.TrainedModel(alpha=0.0001)
     #valueModel = model.BasicModel()
     #valueModel = model.CombinedModel(trainedModel, basicModel)
-    #await trainModel(teams=teams, format='2v2doubles', games=100, epochs=100, valueModel=valueModel)
+    await trainModel(teams=teams, format=format, games=100, epochs=100, valueModel=trainedModel)
+    trainedModel.training = False
     #valueModel.compare = True
     #valueModel.t = 1
     #await humanGame(humanTeams, format='1v1', limit=300)
-    await playTestGame(teams, format=format, limit=1000, numProcesses=3, initMoves=initMoves)
+    #await playTestGame(teams, format=format, limit=3000, numProcesses=3, initMoves=initMoves)
 
-    """
-    limit1 = 1000
+    limit1 = 100
     numProcesses1 = 1
-    limit2 = 1000
-    numProcesses2 = 3
+    limit2 = 300
+    numProcesses2 = 1
     bot1Wins = 0
     bot2Wins = 0
-    #lunala mirror
-    teams = (tvtTeams[4], tvtTeams[4])
     for i in range(200):
         valueModel1 = model.BasicModel()
-        valueModel2 = model.BasicModel()
+        valueModel2 = trainedModel
+        #valueModel2 = model.BasicModel()
         with open(os.devnull, 'w') as devnull:
             result = await playCompGame(teams, format=format, limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, initMoves=initMoves, valueModel1=valueModel1, valueModel2=valueModel2, file=devnull)
         if result == 'bot1':
@@ -585,7 +592,6 @@ async def main():
         elif result == 'bot2':
             bot2Wins += 1
         print('bot1Wins', bot1Wins, 'bot2Wins', bot2Wins)
-    """
 
     """
     i = 0

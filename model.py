@@ -3,12 +3,12 @@
 import collections
 import numpy as np
 import os
-#import tensorflow as tf
-#from tensorflow import keras
+import pickle
+import tensorflow as tf
+from tensorflow import keras
 
 import modelInput
 
-"""
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 #used to compare a trained model to a basic model for the same inputs
@@ -97,6 +97,7 @@ class TrainedModel:
             self.model = model
 
         #used for training
+        self.training = True
         self.savedInputs = []
         self.savedLabels = []
 
@@ -128,6 +129,8 @@ class TrainedModel:
 
     #saves the data-label pair for training later
     def addReward(self, stateHash, stateObj, action1, action2, reward):
+        if not self.training:
+            return
         data = modelInput.toInput(stateObj, action1, action2)
         self.savedInputs.append(data)
         self.savedLabels.append(np.array([reward]))
@@ -147,14 +150,21 @@ class TrainedModel:
     def purge(self, seenStates):
         pass
 
-    #Save and load need to save/load the idMap from modeInput
-    def saveModel(self, name):
-        pass
+    #Save and load, also saves/loads the idMap from modeInput
+    #dir should not include a trailing /
+    def saveModel(self, dir, name):
+        self.model.save(dir + '/' + name + '-model.h5')
+        idMapData = pickle.dumps(modelInput.idMap)
+        with open(dir + '/' + name + '-map.pickle', 'wb') as mapFile:
+            mapFile.write(idMapData)
 
-    def loadModel(self, name):
-        pass
+    def loadModel(self, dir, name):
+        self.model = keras.model.load_model(dir + '/' + name + '-model.h5')
+        self._compile()
+        with open(dir + '/' + name + '-map.pickle', 'rb') as mapFile:
+            idMapData = mapFile.read()
+            modelInput.idMap = pickle.loads(idMapData)
 
-"""
 
 class BasicModel:
     def __init__(self):
