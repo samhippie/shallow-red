@@ -14,7 +14,8 @@ import moves
 from game import Game
 import model
 import modelInput
-import montecarlo as mc
+import montecarlo.rm as rm
+import montecarlo.exp3 as exp3
 
 humanTeams = [
 
@@ -131,17 +132,17 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
 
         await game.startGame()
 
-        mcSearch1 = mc.mcSearchRM
-        getProbs1 = mc.getProbsRM
-        combineData1 = mc.combineRMData
+        mcSearch1 = rm.mcSearchRM
+        getProbs1 = rm.getProbsRM
+        combineData1 = rm.combineRMData
 
-        #mcSearch2 = mc.mcSearchRM
-        #getProbs2 = mc.getProbsRM
-        #combineData2 = mc.combineRMData
+        #mcSearch2 = rm.mcSearchRM
+        #getProbs2 = rm.getProbsRM
+        #combineData2 = rm.combineRMData
 
-        mcSearch2 = mc.mcSearchExp3
-        getProbs2 = mc.getProbsExp3
-        combineData2 = mc.combineExp3Data
+        mcSearch2 = exp3.mcSearchExp3
+        getProbs2 = exp3.getProbsExp3
+        combineData2 = exp3.combineExp3Data
 
 
         if not valueModel1:
@@ -344,7 +345,7 @@ async def trainModel(teams, format, games=100, epochs=100, valueModel=None):
         for i in range(epochs):
             print('epoch', i, 'running', file=sys.stderr)
             valueModel.t = i / epochs
-            await mc.mcSearchRM(
+            await rm.mcSearchRM(
                     searchPs,
                     format,
                     teams,
@@ -437,8 +438,8 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
 
                     searches = []
                     for j in range(numProcesses):
-                        #search = mc.mcSearchExp3(
-                        search = mc.mcSearchRM(
+                        #search = exp3.mcSearchExp3(
+                        search = rm.mcSearchRM(
                                 searchPs[j],
                                 format,
                                 teams,
@@ -461,8 +462,8 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
                     #this assumes that any state that isn't seen in two consecutive iterations isn't worth keeping
                     #it also takes a little bit of processing but that should be okay
                     print('combining', file=sys.stderr)
-                    #mcDatasets = mc.combineExp3Data(mcDatasets)
-                    mcDataset = mc.combineRMData([mcDataset], valueModel)[0]
+                    #mcDatasets = exp3.combineExp3Data(mcDatasets)
+                    mcDataset = rm.combineRMData([mcDataset], valueModel)[0]
 
                 #this assumes that both player1 and player2 get requests each turn
                 #which I think is accurate, but most formats will give one player a waiting request
@@ -483,8 +484,8 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
 
                         #the mcdatasets are all combined, so we can just look at the first
                         data = myMcData[0]
-                        #probs = mc.getProbsExp3(data, state, actions)
-                        probs = mc.getProbsRM(data, state, actions)
+                        #probs = exp3.getProbsExp3(data, state, actions)
+                        probs = rm.getProbsRM(data, state, actions)
                         #remove low probability moves, likely just noise
                         #this can remove every action, but if that's the case then it's doesn't really matter
                         #as all the probabilites are low
@@ -568,7 +569,7 @@ async def main():
     trainedModel = model.TrainedModel(alpha=0.0001)
     #valueModel = model.BasicModel()
     #valueModel = model.CombinedModel(trainedModel, basicModel)
-    await trainModel(teams=teams, format=format, games=100, epochs=100, valueModel=trainedModel)
+    #await trainModel(teams=teams, format=format, games=100, epochs=100, valueModel=trainedModel)
     trainedModel.training = False
     #valueModel.compare = True
     #valueModel.t = 1
@@ -583,8 +584,8 @@ async def main():
     bot2Wins = 0
     for i in range(200):
         valueModel1 = model.BasicModel()
-        valueModel2 = trainedModel
-        #valueModel2 = model.BasicModel()
+        #valueModel2 = trainedModel
+        valueModel2 = model.BasicModel()
         with open(os.devnull, 'w') as devnull:
             result = await playCompGame(teams, format=format, limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, initMoves=initMoves, valueModel1=valueModel1, valueModel2=valueModel2, file=devnull)
         if result == 'bot1':
