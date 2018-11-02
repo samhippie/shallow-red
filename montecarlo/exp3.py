@@ -12,6 +12,43 @@ from game import Game
 import moves
 
 #Exp3
+
+class Exp3Agent:
+    def __init__(self, teams, format, gamma=0.3, verbose=False):
+        self.teams = teams
+        self.format = format
+        self.verbose = verbose
+
+        self.mcData = []
+        for i in range(2):
+            data = {
+                'gamma': gamma,
+                'countTable': collections.defaultdict(int),
+                'expValueTable': collections.defaultdict(int),
+                'seenStates': {},
+            }
+            self.mcData.append(data)
+
+    async def search(self, ps, pid=0, limit=100, seed=None, initActions=[[],[]]):
+
+        await mcSearchExp3(
+                ps,
+                self.format,
+                self.teams,
+                self.mcData,
+                limit=limit,
+                seed=seed,
+                p1InitActions=initActions[0],
+                p2InitActions=initActions[1],
+                verbose=self.verbose)
+
+    def getProbs(self, player, state, actions):
+        return getProbsExp3(self.mcData[player], state, actions)
+
+    def combine(self):
+        self.mcData = combineExp3Data([self.mcData])[0]
+
+
 #initActions is a list of initial actions that will be blindy taken
 #mcData has countTable, which maps (state, action) to count
 #mcData has expValueTable, which maps (stat, action) to an expected value
@@ -19,11 +56,11 @@ import moves
 #mcData has gamma, which is a number [0,1], prob of picking random move
 #iter is the iteration number, which may be used to compute gamma
 async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
-        format, iter=0, initActions=[]):
+        format, iter=0, initActions=[], verbose=False):
 
     countTable = mcData['countTable']
     expValueTable = mcData['expValueTable']
-    gamma = mcData['gamma'](iter)
+    gamma = mcData['gamma']
     seenStates = mcData['seenStates']
 
     #history so we can update probTable
@@ -36,6 +73,9 @@ async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
     inInitActions = True
     while running:
         request = await requestQueue.get()
+
+        if verbose:
+            print(cmdHeader, 'got request', request)
 
         if request[0] == Game.REQUEST or request[0] == Game.ERROR:
             req = request[1]
@@ -80,9 +120,9 @@ async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
             #save our action
             history.append((state, bestAction, bestActionProb))
 
-            #prevAction = bestAction
-            #prevState = state
-            #send out the action
+            if verbose:
+                print('picked', cmdHeader + bestAction)
+
             await cmdQueue.put(cmdHeader + bestAction)
 
         elif request[0] == Game.END:
@@ -99,29 +139,20 @@ async def mcExp3Impl(requestQueue, cmdQueue, cmdHeader, mcData,
 
 #Exp3
 async def mcSearchExp3(ps, format, teams, mcData, limit=100,
-        seed=None, p1InitActions=[], p2InitActions=[]):
-    for i in range(len(mcData)):
-        if 'countTable' not in mcData[i]:
-            mcData[i]['countTable'] = collections.defaultdict(int)
-        if 'expValueTable' not in mcData[i]:
-            mcData[i]['expValueTable'] = collections.defaultdict(int)
-        if 'gamma' not in mcData[i]:
-            mcData[i]['gamma'] = lambda x: 0.3
-        if 'seenStates' not in mcData[i]:
-            mcData[i]['seenStates'] = {}
+        seed=None, p1InitActions=[], p2InitActions=[], verbose=False):
 
     print(end='', file=sys.stderr)
     for i in range(limit):
         print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
-        game = Game(ps, teams, format=format, seed=seed, verbose=False)
+        game = Game(ps, teams, format=format, seed=seed, verbose=verbose)
         await game.startGame()
         await asyncio.gather(
                 mcExp3Impl(game.p1Queue, game.cmdQueue,
                     ">p1", mcData=mcData[0], format=format,
-                    initActions=p1InitActions),
+                    initActions=p1InitActions, verbose=verbose),
                 mcExp3Impl(game.p2Queue, game.cmdQueue,
                     ">p2", mcData=mcData[1], format=format,
-                    initActions=p2InitActions))
+                    initActions=p2InitActions, verbose=verbose))
     print(file=sys.stderr)
 
 def combineExp3Data(mcDatasets, valueModel=None):
@@ -142,10 +173,12 @@ def combineExp3Data(mcDatasets, valueModel=None):
             for j in range(2):
                 countTable = data[j]['countTable']
                 expValueTable = data[j]['expValueTable']
-                for state, action in countTable:
+                keys = list(countTable)
+                for state, action in keys:
                     if state not in seenStates:
                         del countTable[(state, action)]
-                        del expValueTable[(state, action)]
+                        if (state, action) in expValueTable:
+                            del expValueTable[(state, action)]
         return mcDatasets
 
 
@@ -180,13 +213,8 @@ def getProbsExp3(mcData, state, actions):
     #not sure if I should make this adjustment or not
     #experiments seem to show that it helps
 
-    #if average gamma is specified, use it
-    #otherwise assume gamma is constant
-    if 'avgGamma' in mcData:
-        avgGamma = mcData['avgGamma']
-    else:
-        avgGamma = mcData['gamma'](0)
-    probs = np.array([max(0, c - avgGamma * totalCount / len(actions)) for c in counts])
+    gamma = mcData['gamma']
+    probs = np.array([max(0, c - gamma * totalCount / len(actions)) for c in counts])
     probs = probs / np.sum(probs)
     return probs
 

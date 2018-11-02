@@ -193,7 +193,8 @@ class BasicModel:
 
     #removes information on states that haven't been seen
     def purge(self, seenStates):
-        for key in self.rewardTable:
+        keys = list(self.rewardTable)
+        for key in keys:
             stateHash = key[0]
             if not stateHash in seenStates:
                 del self.rewardTable[key]

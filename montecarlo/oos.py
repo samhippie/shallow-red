@@ -15,12 +15,57 @@ import moves
 #http://mlanctot.info/files/papers/aij-2psimmove.pdf
 #page 33
 
+class OnlineOutcomeSamplingAgent:
+    def __init__(self, teams, format, gamma=0.3, posReg=False, probScaling=0, regScaling=0, verbose=False):
+        self.teams = teams
+        self.format = format
+        self.posReg = posReg
+        self.probScaling = probScaling
+        self.regScaling = regScaling
+        self.verbose = verbose
+
+
+        self.mcData = []
+        for i in range(2):
+            data = {
+                'gamma': gamma,
+                'regretTable': collections.defaultdict(int),
+                'probTable': collections.defaultdict(int),
+                'seenStates': {},
+            }
+            self.mcData.append(data)
+
+    async def search(self, ps, pid=0, limit=100, seed=None, initActions=[[],[]]):
+        await mcSearchOOS(
+                ps,
+                self.format,
+                self.teams,
+                self.mcData,
+                limit=limit,
+                seed=seed,
+                p1InitActions=initActions[0],
+                p2InitActions=initActions[1],
+                posReg=self.posReg,
+                probScaling=self.probScaling,
+                regScaling=self.regScaling,
+                verbose=self.verbose)
+
+    def getProbs(self, player, state, actions):
+        probTable = self.mcData[player]['probTable']
+        probs = np.array([probTable[(state, action)] for action in actions])
+        return probs / np.sum(probs)
+
+    def combine(self):
+        self.mcData = combineOOSData([self.mcData])[0]
+
+
 async def mcOOSImpl(requestQueue, cmdQueue, cmdHeader, mcData,
-        format, playerNum, iter, initActions, pid=0, verbose=False):
+        format, playerNum, iter, initActions, pid=0,
+        posReg=False, probScaling=0, regScaling=0, verbose=False):
 
     regretTable = mcData['regretTable']
     seenStates = mcData['seenStates']
-    gamma = mcData['gamma'](iter)
+    gamma = mcData['gamma']
     probTable = mcData['probTable']
 
     #stack where our actions/strategies are stored
@@ -127,26 +172,13 @@ async def mcOOSImpl(requestQueue, cmdQueue, cmdHeader, mcData,
                         probTable[(state, actions[i])] += probs[i]
 
 
-
-
-
 async def mcSearchOOS(ps, format, teams, mcData, limit=100,
         seed=None, p1InitActions=[], p2InitActions=[],
-        initExpVal=0, verbose=False):
+        posReg=False, probScaling=0, regScaling=0, verbose=False):
 
-    for i in range(len(mcData)):
-        data = mcData[i]
-        if not 'regretTable' in data:
-            data['regretTable'] = collections.defaultdict(int)
-        if not 'probTable' in data:
-            data['probTable'] = collections.defaultdict(int)
-        #gamma is actually epsilon in the paper
-        #but we use gamma for this everywhere else
-        if not 'gamma' in data:
-            data['gamma'] = lambda iter: 0.3
-
-        #always clear seen states
-        data['seenStates'] = {}
+    #always clear seen states
+    mcData[0]['seenStates'] = {}
+    mcData[1]['seenStates'] = {}
 
     for i in range(limit):
         print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
@@ -157,23 +189,20 @@ async def mcSearchOOS(ps, format, teams, mcData, limit=100,
                     ">p1", mcData=mcData[0],
                     format=format, iter=i, playerNum=0,
                     initActions=p1InitActions,
+                    posReg=posReg, probScaling=probScaling,
+                    regScaling=regScaling,
                     verbose=verbose),
                 mcOOSImpl(game.p2Queue, game.cmdQueue,
                     ">p2", mcData=mcData[1],
                     format=format, iter=i, playerNum=1,
                     initActions=p2InitActions,
+                    posReg=posReg, probScaling=probScaling,
+                    regScaling=regScaling,
                     verbose=verbose))
 
     print(file=sys.stderr)
 
-
-
-def getProbsOOS(mcData, state, actions):
-    probTable = mcData['probTable']
-    probs = np.array([probTable[(state, action)] for action in actions])
-    return probs / np.sum(probs)
-
-def combineOOSData(mcDatasets, valueModel=None):
+def combineOOSData(mcDatasets):
     num = len(mcDatasets)
     #we'll assume that parallelization can be done naively
     #record which states were seen in the last iteration
@@ -184,10 +213,6 @@ def combineOOSData(mcDatasets, valueModel=None):
             for state in seen:
                 seenStates[state] = True
 
-    if valueModel:
-        valueModel.purge(seenStates)
-
-    print(len(seenStates))
     if num == 1:
         #no need to copy data around, just delete it directly
         data = mcDatasets[0]
@@ -198,6 +223,7 @@ def combineOOSData(mcDatasets, valueModel=None):
             for state, action in keys:
                 if state not in seenStates:
                     del probTable[(state, action)]
-                    del regretTable[(state, action)]
+                    if (state, action) in regretTable:
+                        del regretTable[(state, action)]
 
         return mcDatasets

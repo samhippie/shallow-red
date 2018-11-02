@@ -74,6 +74,32 @@ tvtTeams = [
 PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
 PS_ARG = 'simulate-battle'
 
+def getAgent(algo, teams, format):
+    if algo == 'rm':
+        agent = rm.RegretMatchAgent(
+                teams=teams,
+                format=format,
+                posReg=True,
+                probScaling=2,
+                regScaling=1.5,
+                verbose=False)
+    elif algo == 'oos':
+        agent = oos.OnlineOutcomeSamplingAgent(
+                teams=teams,
+                format=format,
+                posReg=True,
+                probScaling=2,
+                regScaling=1.5,
+                verbose=False)
+    elif algo == 'exp3':
+        agent = exp3.Exp3Agent(
+                teams=teams,
+                format=format,
+                verbose=False)
+    return agent
+
+
+
 async def playRandomGame(teams, format, ps=None):
     if not ps:
         ps = await getPSProcess()
@@ -114,7 +140,7 @@ async def playRandomGame(teams, format, ps=None):
 #plays two separately trained agents
 #I just copied and pasted playTestGame and duplicated all the search functions
 #so expect this to take twice as long as playTestGame with the same parameters
-async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses1=1, numProcesses2=1, file=sys.stdout, initMoves=([],[]), valueModel1=None, valueModel2=None):
+async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses1=1, numProcesses2=1, algo1='rm', algo2='rm', file=sys.stdout, initMoves=([],[]), valueModel1=None, valueModel2=None, concurrent=False):
     try:
 
         mainPs = await getPSProcess()
@@ -131,59 +157,10 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
 
         game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
+        agent1 = getAgent(algo1, teams, format)
+        agent2 = getAgent(algo2, teams, format)
+
         await game.startGame()
-
-        mcSearch1 = rm.mcSearchRM
-        getProbs1 = rm.getProbsRM
-        combineData1 = rm.combineRMData
-
-        #mcSearch2 = rm.mcSearchRM
-        #getProbs2 = rm.getProbsRM
-        #combineData2 = rm.combineRMData
-
-        mcSearch2 = exp3.mcSearchExp3
-        getProbs2 = exp3.getProbsExp3
-        combineData2 = exp3.combineExp3Data
-
-
-        if not valueModel1:
-            valueModel1 = model.BasicModel()
-        if not valueModel2:
-            valueModel2 = model.BasicModel()
-
-        #holds the montecarlo data
-        #each entry goes to one process
-        #this will get really big with n=3 after 20ish turns if you
-        #don't purge old data
-        mcDatasets1 = []
-        mcDatasets2 = []
-
-        #likelihood of the search agent picking random moves
-        #decreases exponentially as the search goes on
-        def gamma1(iter):
-            #return 1 / 2 ** (1 + 10 * iter / limit1)
-            return 0.3
-        def gamma2(iter):
-            #return 1 / 2 ** (1 + 10 * iter / limit2)
-            return 0.3
-        mcDatasets1 = [{
-            'gamma': gamma1,
-            'getExpValue': valueModel1.getExpValue,
-            'addReward': valueModel1.addReward,
-        }, {
-            'gamma': gamma1,
-            'getExpValue': valueModel1.getExpValue,
-            'addReward': valueModel1.addReward,
-        }]
-        mcDatasets2 = [{
-            'gamma': gamma2,
-            'getExpValue': valueModel2.getExpValue,
-            'addReward': valueModel2.addReward,
-        }, {
-            'gamma': gamma2,
-            'getExpValue': valueModel2.getExpValue,
-            'addReward': valueModel2.addReward,
-        }]
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03
@@ -195,107 +172,82 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
             #actions taken so far by in the actual game
             p1Actions = []
             p2Actions = []
-            #we reassign this later, so we have to declare it nonlocal
-            nonlocal mcDatasets1
-            nonlocal mcDatasets2
             while True:
                 i += 1
                 print('starting turn', i, file=sys.stderr)
 
                 #don't search if we aren't going to use the results
                 if len(initMoves[0]) == 0 or len(initMoves[1]) == 0:
-                    #I suspect that averaging two runs together will
-                    #give us more improvement than running for twice as long
-                    #and it should run faster than a single long search due to parallelism
 
                     searches1 = []
                     searches2 = []
                     for j in range(numProcesses1):
-                        search1 = mcSearch1(
-                                searchPs1[j],
-                                format,
-                                teams,
-                                limit=limit1,
-                                seed=seed,
-                                p1InitActions=p1Actions,
-                                p2InitActions=p2Actions,
-                                mcData=mcDatasets1,
+                        search1 = agent1.search(
+                                ps=searchPs1[j],
                                 pid=j,
-                                posReg=True,
-                                initExpVal=0,
-                                probScaling=2,
-                                regScaling=1.5)
+                                limit=limit1,
+                                seed=seed)
                         searches1.append(search1)
 
                     for j in range(numProcesses2):
-                        search2 = mcSearch2(
-                                searchPs2[j],
-                                format,
-                                teams,
+                        search2 = agent2.search(
+                                ps=searchPs2[j],
+                                pid=j,
                                 limit=limit2,
-                                seed=seed,
-                                p1InitActions=p1Actions,
-                                p2InitActions=p2Actions,
-                                mcData=mcDatasets2)#,
-                                #pid=j,
-                                #posReg=True,
-                                #initExpVal=0.5,
-                                #probScaling=2,
-                                #regScaling=1.5)
+                                seed=seed)
                         searches2.append(search2)
 
-
-
-                    await asyncio.gather(*searches1)
-                    await asyncio.gather(*searches2)
-                    #await asyncio.gather(*searches1, *searches2)
-
-                    #combine the processes results together, purge unused information
-                    #this assumes that any state that isn't seen in two consecutive iterations isn't worth keeping
-                    #it also takes a little bit of processing but that should be okay
-                    print('combining', file=sys.stderr)
-
-                    mcDatasets1 = combineData1([mcDatasets1], valueModel1)[0]
-                    mcDatasets2 = combineData2([mcDatasets2], valueModel2)[0]
-
-                #this assumes that both player1 and player2 get requests each turn
-                #which I think is accurate, but most formats will give one player a waiting request
-                #this will lock up if a player causes an error, so don't do that
-
-                #TODO this signature is ugly, reorganize it so we can just pass an index
-                async def playTurn(queue, myMcData, actionList, cmdHeader, initMoves, getProbs):
-
-                    request = await queue.get()
-
-                    if len(initMoves) > 0:
-                        action = initMoves[0]
-                        del initMoves[0]
-                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' pre-set action:', action, file=file)
+                    if concurrent:
+                        await asyncio.gather(*searches1, *searches2)
                     else:
+                        await asyncio.gather(*searches1)
+                        await asyncio.gather(*searches2)
+
+                    #let the agents combine and purge data
+                    print('combining', file=sys.stderr)
+                    agent1.combine()
+                    agent2.combine()
+
+
+                #player-specific
+                queues = [game.p1Queue, game.p2Queue]
+                actionLists = [p1Actions, p2Actions]
+                cmdHeaders = ['>p1', '>p2']
+                agents = [agent1, agent2]
+
+                async def playTurn(num):
+
+                    request = await queues[num].get()
+
+                    if len(initMoves[num]) > 0:
+                        #do the given action
+                        action = initMoves[num][0]
+                        del initMoves[num][0]
+                        print('|c|' + cmdHeaders[num] + '|Turn ' + str(i) + ' pre-set action:', action, file=file)
+                    else:
+                        #let the agent pick the action
                         #figure out what kind of action we need
                         state = request[1]['stateHash']
                         actions = moves.getMoves(format, request[1])
 
-                        #the mcdatasets are all combined, so we can just look at the first
-                        data = myMcData[0]
-                        probs = getProbs(data, state, actions)
+                        probs = agents[num].getProbs(num, state, actions)
+                        #remove low probability moves, likely just noise
                         normProbs = np.array([p if p > probCutoff else 0 for p in probs])
                         normProbs = normProbs / np.sum(normProbs)
 
                         for j in range(len(actions)):
+                            actionString = moves.prettyPrintMove(actions[j], request[1])
                             if normProbs[j] > 0:
-                                print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actions[j],
+                                print('|c|' + cmdHeaders[num] + '|Turn ' + str(i) + ' action:', actionString,
                                         'prob:', '%.1f%%' % (normProbs[j] * 100), file=file)
 
                         action = np.random.choice(actions, p=normProbs)
 
-                    actionList.append(action)
-                    await game.cmdQueue.put(cmdHeader + action)
+                    actionLists[num].append(action)
+                    await game.cmdQueue.put(cmdHeaders[num] + action)
 
-                #await playTurn(game.p1Queue, [data[0] for data in mcDatasets1], p1Actions, '>p1', initMoves[0], getProbs1)
-                #await playTurn(game.p2Queue, [data[1] for data in mcDatasets2], p2Actions, '>p2', initMoves[1], getProbs2)
-                await playTurn(game.p1Queue, [mcDatasets1[0]], p1Actions, '>p1', initMoves[0], getProbs1)
-                await playTurn(game.p2Queue, [mcDatasets2[1]], p2Actions, '>p2', initMoves[1], getProbs2)
+                await playTurn(0)
+                await playTurn(1)
 
         gameTask = asyncio.ensure_future(play())
         winner = await game.winner
@@ -303,8 +255,8 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
         print('winner:', winner, file=sys.stderr)
         return winner
 
-    except Exception as e:
-        print(e, file=sys.stderr)
+    except:
+        raise
 
     finally:
         mainPs.terminate()
@@ -370,7 +322,7 @@ async def trainModel(teams, format, games=100, epochs=100, valueModel=None):
     return valueModel
 
 
-async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueModel=None, file=sys.stdout, initMoves=([],[])):
+async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueModel=None, algo='rm', file=sys.stdout, initMoves=([],[])):
     try:
 
         mainPs = await getPSProcess()
@@ -386,32 +338,7 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
 
         game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
-
-
-        #holds the montecarlo data
-        #each entry goes to one process
-        #this will get really big with n=3 after 20ish turns if you
-        #don't purge old data
-        #mcDatasets = []
-
-        def gamma(iter):
-            return 0.3
-
-        if not valueModel:
-            valueModel = model.BasicModel()
-
-        #for i in range(numProcesses):
-            #mcDatasets.append([{
-        mcDataset = [{
-            'gamma': gamma,
-            #'getExpValue': valueModel.getExpValue,
-            #'addReward': valueModel.addReward,
-        }, {
-            'gamma': gamma,
-            #'getExpValue': valueModel.getExpValue,
-            #'addReward': valueModel.addReward,
-        }]
-
+        agent = getAgent(algo, teams, format)
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03
@@ -426,88 +353,69 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
             p1Actions = []
             p2Actions = []
             #we reassign this later, so we have to declare it nonlocal
-            nonlocal mcDataset
+            #nonlocal mcDataset
             while True:
                 i += 1
                 print('starting turn', i, file=sys.stderr)
 
                 #don't search if we aren't going to use the results
                 if len(initMoves[0]) == 0 or len(initMoves[1]) == 0:
-                    #I suspect that averaging two runs together will
-                    #give us more improvement than running for twice as long
-                    #and it should run faster than a single long search due to parallelism
 
                     searches = []
                     for j in range(numProcesses):
-                        #search = exp3.mcSearchExp3(
-                        search = oos.mcSearchOOS(
-                                searchPs[j],
-                                format,
-                                teams,
+                        search = agent.search(
+                                ps=searchPs[j],
+                                pid=j,
                                 limit=limit,
                                 seed=seed,
-                                p1InitActions=p1Actions,
-                                p2InitActions=p2Actions,
-                                mcData=mcDataset,
-                                #pid=j,
-                                #initExpVal=0,
-                                #probScaling=2,
-                                #regScaling=1.5,
-                                verbose=False)
+                                initActions=[p1Actions, p2Actions])
                         searches.append(search)
 
 
                     await asyncio.gather(*searches)
 
-                    #combine the processes results together, purge unused information
-                    #this assumes that any state that isn't seen in two consecutive iterations isn't worth keeping
-                    #it also takes a little bit of processing but that should be okay
+                    #let the agents combine and purge data
                     print('combining', file=sys.stderr)
-                    #mcDatasets = exp3.combineExp3Data(mcDatasets)
-                    mcDataset = oos.combineOOSData([mcDataset])[0]
+                    agent.combine()
 
-                #this assumes that both player1 and player2 get requests each turn
-                #which I think is accurate, but most formats will give one player a waiting request
-                #this will lock up if a player causes an error, so don't do that
+                #player-specific
+                queues = [game.p1Queue, game.p2Queue]
+                actionLists = [p1Actions, p2Actions]
+                cmdHeaders = ['>p1', '>p2']
 
-                async def playTurn(queue, myMcData, actionList, cmdHeader, initMoves):
+                async def playTurn(num):
 
-                    request = await queue.get()
+                    request = await queues[num].get()
 
-                    if len(initMoves) > 0:
-                        action = initMoves[0]
-                        del initMoves[0]
-                        print('|c|' + cmdHeader + '|Turn ' + str(i) + ' pre-set action:', action, file=file)
+                    if len(initMoves[num]) > 0:
+                        #do the given action
+                        action = initMoves[num][0]
+                        del initMoves[num][0]
+                        print('|c|' + cmdHeaders[num] + '|Turn ' + str(i) + ' pre-set action:', action, file=file)
                     else:
+                        #let the agent pick the action
                         #figure out what kind of action we need
                         state = request[1]['stateHash']
                         actions = moves.getMoves(format, request[1])
 
-                        #the mcdatasets are all combined, so we can just look at the first
-                        data = myMcData[0]
-                        #probs = exp3.getProbsExp3(data, state, actions)
-                        probs = oos.getProbsOOS(data, state, actions)
+                        probs = agent.getProbs(num, state, actions)
                         #remove low probability moves, likely just noise
-                        #this can remove every action, but if that's the case then it's doesn't really matter
-                        #as all the probabilites are low
                         normProbs = np.array([p if p > probCutoff else 0 for p in probs])
                         normProbs = normProbs / np.sum(normProbs)
 
                         for j in range(len(actions)):
                             actionString = moves.prettyPrintMove(actions[j], request[1])
                             if normProbs[j] > 0:
-                                print('|c|' + cmdHeader + '|Turn ' + str(i) + ' action:', actionString,
+                                print('|c|' + cmdHeaders[num] + '|Turn ' + str(i) + ' action:', actionString,
                                         'prob:', '%.1f%%' % (normProbs[j] * 100), file=file)
 
                         action = np.random.choice(actions, p=normProbs)
 
-                    actionList.append(action)
-                    await game.cmdQueue.put(cmdHeader + action)
+                    actionLists[num].append(action)
+                    await game.cmdQueue.put(cmdHeaders[num] + action)
 
-                #await playTurn(game.p1Queue, [data[0] for data in mcDatasets], p1Actions, '>p1', initMoves[0])
-                #await playTurn(game.p2Queue, [data[1] for data in mcDatasets], p2Actions, '>p2', initMoves[1])
-                await playTurn(game.p1Queue, [mcDataset[0]], p1Actions, '>p1', initMoves[0])
-                await playTurn(game.p2Queue, [mcDataset[1]], p2Actions, '>p2', initMoves[1])
+                await playTurn(0)
+                await playTurn(1)
 
 
         gameTask = asyncio.ensure_future(play())
@@ -575,27 +483,26 @@ async def main():
     #valueModel.compare = True
     #valueModel.t = 1
     #await humanGame(humanTeams, format='1v1', limit=300)
-    await playTestGame(teams, format=format, limit=1000, numProcesses=1, initMoves=initMoves)
+    #await playTestGame(teams, format=format, limit=100, numProcesses=1, initMoves=initMoves, algo='oos')
 
-    """
     limit1 = 100
     numProcesses1 = 1
-    limit2 = 300
+    algo1 = 'oos'
+
+    limit2 = 100
     numProcesses2 = 1
+    algo2 = 'exp3'
+
     bot1Wins = 0
     bot2Wins = 0
     for i in range(200):
-        valueModel1 = model.BasicModel()
-        #valueModel2 = trainedModel
-        valueModel2 = model.BasicModel()
         with open(os.devnull, 'w') as devnull:
-            result = await playCompGame(teams, format=format, limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, initMoves=initMoves, valueModel1=valueModel1, valueModel2=valueModel2, file=devnull)
+            result = await playCompGame(teams, format=format, limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, algo1=algo1, algo2=algo2, initMoves=initMoves, concurrent=True, file=devnull)
         if result == 'bot1':
             bot1Wins += 1
         elif result == 'bot2':
             bot2Wins += 1
         print('bot1Wins', bot1Wins, 'bot2Wins', bot2Wins)
-    """
 
     """
     i = 0
