@@ -204,7 +204,7 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
                             regretTable[(state, actions[j])] = regret + expValue - reward
 
                     #update each action's probability
-                    probScale = ((iter+1) / ((iter + 2)))**probScaling
+                    probScale = ((iter+1) / (iter + 2))**probScaling
                     oldProb = probTable[(state, actions[j])]
                     probTable[(state, actions[j])] = probScale * oldProb + probs[j]
 

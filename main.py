@@ -42,7 +42,7 @@ ovoTeams = [
 
     '|tapulele|psychiumz||psychic,calmmind,reflect,moonblast|Calm|252,,60,,196,||,0,,,,|||]|charizard|charizarditex||willowisp,flamecharge,flareblitz,outrage|Jolly|252,,,,160,96|||||]|pheromosa|fightiniumz||bugbuzz,icebeam,focusblast,lunge|Modest|,,160,188,,160|||||',
 
-    '|charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,icebeam|Quiet|252,4,,252,,|M||||',
+    '|charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||',
 ]
 
 #please don't use a stall team
@@ -87,9 +87,9 @@ def getAgent(algo, teams, format):
         agent = oos.OnlineOutcomeSamplingAgent(
                 teams=teams,
                 format=format,
-                posReg=True,
-                probScaling=2,
-                regScaling=1.5,
+                #posReg=True,
+                #probScaling=2,
+                #regScaling=1.5,
                 verbose=False)
     elif algo == 'exp3':
         agent = exp3.Exp3Agent(
@@ -483,21 +483,21 @@ async def main():
     #valueModel.compare = True
     #valueModel.t = 1
     #await humanGame(humanTeams, format='1v1', limit=300)
-    #await playTestGame(teams, format=format, limit=100, numProcesses=1, initMoves=initMoves, algo='oos')
+    #await playTestGame(teams, format=format, limit=300, numProcesses=3, initMoves=initMoves, algo='oos')
 
-    limit1 = 100
-    numProcesses1 = 1
+    limit1 = 500
+    numProcesses1 = 3
     algo1 = 'oos'
 
-    limit2 = 100
-    numProcesses2 = 1
-    algo2 = 'exp3'
+    limit2 = 300
+    numProcesses2 = 3
+    algo2 = 'rm'
 
     bot1Wins = 0
     bot2Wins = 0
-    for i in range(200):
+    for i in range(20):
         with open(os.devnull, 'w') as devnull:
-            result = await playCompGame(teams, format=format, limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, algo1=algo1, algo2=algo2, initMoves=initMoves, concurrent=True, file=devnull)
+            result = await playCompGame(teams, format=format, limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, algo1=algo1, algo2=algo2, initMoves=initMoves, concurrent=False, file=devnull)
         if result == 'bot1':
             bot1Wins += 1
         elif result == 'bot2':

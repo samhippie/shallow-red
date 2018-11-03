@@ -53,10 +53,12 @@ doublesFormats = ['doubles', '2v2doubles', '2v2', 'vgc']
 #using the cache seems to be a little bit faster in tests
 #1000 games 1v1 went from 43s to 40s
 def getMoves(format, req):
-    key = (format, str(req))
-    if not key in actionCache:
-        actionCache[key] = getMovesImpl(format, req)
-    return actionCache[key]
+    #not caching because req now includes things like seeds
+    return getMovesImpl(format, req)
+    #key = (format, str(req))
+    #if not key in actionCache:
+        #actionCache[key] = getMovesImpl(format, req)
+    #return actionCache[key]
 
 #this takes the req as a dict
 #this works for anything that doesn't require switching

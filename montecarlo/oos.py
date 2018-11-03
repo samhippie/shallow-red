@@ -158,18 +158,29 @@ async def mcOOSImpl(requestQueue, cmdQueue, cmdHeader, mcData,
                     p = probs[actionIndex]
                     ep = exploreProbs[actionIndex]
                     #update picked action's regret
-                    regretTable[(state, action)] += (1-p) / ep * w
+                    regret = regretTable[(state, action)]
+                    if regScaling != 0:
+                        regret *= ((iter+1)**regScaling) / ((iter+1)**regScaling + 1)
+                    regretTable[(state, action)] = regret + (1-p) / ep * w
                     #update other actions' regrets
                     for i in range(len(actions)):
                         if i == actionIndex:
                             continue
-                        regretTable[(state, actions[i])] -= p / ep * w
+                        regret = regretTable[(state, actions[i])]
+                        if regScaling != 0:
+                            regret *= ((iter+1)**regScaling) / ((iter+1)**regScaling + 1)
+                        if posReg:
+                            regretTable[(state, actions[i])] = max(0, regret - p / ep * w)
+                        else:
+                            regretTable[(state, actions[i])] = regret - p / ep * w
                     x *= p
                     q *= ep
                 else:
                     #update off player's average stategy
+                    probScale = ((iter+1) / (iter+2))**probScaling
                     for i in range(len(actions)):
-                        probTable[(state, actions[i])] += probs[i]
+                        oldProb = probTable[(state, actions[i])]
+                        probTable[(state, actions[i])] = probScale * oldProb + probs[i]
 
 
 async def mcSearchOOS(ps, format, teams, mcData, limit=100,
