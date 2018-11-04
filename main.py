@@ -43,6 +43,8 @@ ovoTeams = [
     '|tapulele|psychiumz||psychic,calmmind,reflect,moonblast|Calm|252,,60,,196,||,0,,,,|||]|charizard|charizarditex||willowisp,flamecharge,flareblitz,outrage|Jolly|252,,,,160,96|||||]|pheromosa|fightiniumz||bugbuzz,icebeam,focusblast,lunge|Modest|,,160,188,,160|||||',
 
     '|charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||',
+
+    '|charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||fissure,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||',
 ]
 
 #please don't use a stall team
@@ -74,7 +76,7 @@ tvtTeams = [
 PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
 PS_ARG = 'simulate-battle'
 
-def getAgent(algo, teams, format):
+def getAgent(algo, teams, format, valueModel=None):
     if algo == 'rm':
         agent = rm.RegretMatchAgent(
                 teams=teams,
@@ -82,6 +84,7 @@ def getAgent(algo, teams, format):
                 posReg=True,
                 probScaling=2,
                 regScaling=1.5,
+                valueModel=valueModel,
                 verbose=False)
     elif algo == 'oos':
         agent = oos.OnlineOutcomeSamplingAgent(
@@ -157,8 +160,8 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
 
         game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
-        agent1 = getAgent(algo1, teams, format)
-        agent2 = getAgent(algo2, teams, format)
+        agent1 = getAgent(algo1, teams, format, valueModel1)
+        agent2 = getAgent(algo2, teams, format, valueModel2)
 
         await game.startGame()
 
@@ -268,48 +271,28 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
 
 #trains a model for the given format with the given teams
 #returns the trained model
-async def trainModel(teams, format, games=100, epochs=100, valueModel=None):
+async def trainModel(teams, format, games=100, epochs=100, numProcesses=1, valueModel=None):
     try:
-        searchPs = await getPSProcess()
+        searchPs = [await getPSProcess() for p in range(numProcesses)]
 
         if not valueModel:
             valueModel = model.TrainedModel(alpha=0.0001)
 
-        def getExpValue(*args):
-            return valueModel.getExpValue(*args)
-        def addReward(*args):
-            return valueModel.addReward(*args)
-
-        def gamma(iter):
-            return 0.3
-
-        mcData = [{
-            'gamma': gamma,
-            'getExpValue': valueModel.getExpValue,
-            'addReward': addReward,
-        }, {
-            'gamma': gamma,
-            'getExpValue': valueModel.getExpValue,
-            'addReward': addReward,
-        }]
-
+        agent = getAgent('rm', teams, format, valueModel=valueModel)
 
         print('starting network training', file=sys.stderr)
         for i in range(epochs):
             print('epoch', i, 'running', file=sys.stderr)
             valueModel.t = i / epochs
-            await rm.mcSearchRM(
-                    searchPs,
-                    format,
-                    teams,
-                    limit=games,
-                    #seed=seed,
-                    #p1InitActions=p1Actions,
-                    #p2InitActions=p2Actions,
-                    mcData=mcData,
-                    initExpVal=0,
-                    probScaling=2,
-                    regScaling=1.5)
+
+            searches = []
+            for j in range(numProcesses):
+                search = agent.search(
+                    ps=searchPs[j],
+                    pid=j,
+                    limit=games)
+                searches.append(search)
+            await asyncio.gather(*searches)
 
             print('epoch', i, 'training', file=sys.stderr)
             valueModel.train(epochs=10)
@@ -318,7 +301,8 @@ async def trainModel(teams, format, games=100, epochs=100, valueModel=None):
         raise
 
     finally:
-        searchPs.terminate()
+        for ps in searchPs:
+            ps.terminate()
     return valueModel
 
 
@@ -338,7 +322,7 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
 
         game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
-        agent = getAgent(algo, teams, format)
+        agent = getAgent(algo, teams, format, valueModel)
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03
@@ -466,6 +450,9 @@ async def main():
     #initMoves = ([' team 1'], [' team 1'])
     initMoves = ([], [])
 
+    #teams = (ovoTeams[5], ovoTeams[5])
+    #initMoves = ([' team 2'], [' team 2'])
+
     """
     ps = await getPSProcess()
     try:
@@ -475,7 +462,12 @@ async def main():
     """
 
 
-    #trainedModel = model.TrainedModel(alpha=0.0001)
+    #valueModel = await trainModel(teams=teams, format=format, games=100, epochs=10, numProcesses=1)
+    #valueModel.saveModel('/home/sam/scratch/psbot/models', 'kanto')
+
+    valueModel = model.TrainedModel()
+    valueModel.loadModel('/home/sam/scratch/psbot/models', 'kanto')
+
     #valueModel = model.BasicModel()
     #valueModel = model.CombinedModel(trainedModel, basicModel)
     #await trainModel(teams=teams, format=format, games=100, epochs=100, valueModel=trainedModel)
@@ -483,7 +475,9 @@ async def main():
     #valueModel.compare = True
     #valueModel.t = 1
     #await humanGame(humanTeams, format='1v1', limit=300)
-    #await playTestGame(teams, format=format, limit=300, numProcesses=3, initMoves=initMoves, algo='oos')
+    await playTestGame(teams, format=format, limit=20, numProcesses=3, initMoves=initMoves, algo='rm', valueModel=valueModel)
+
+    return
 
     limit1 = 500
     numProcesses1 = 3
@@ -497,12 +491,12 @@ async def main():
     bot2Wins = 0
     for i in range(20):
         with open(os.devnull, 'w') as devnull:
-            result = await playCompGame(teams, format=format, limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, algo1=algo1, algo2=algo2, initMoves=initMoves, concurrent=False, file=devnull)
+            result = await playCompGame(teams, format=format, limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, algo1=algo1, algo2=algo2, initMoves=initMoves, concurrent=False)#, file=devnull)
         if result == 'bot1':
             bot1Wins += 1
         elif result == 'bot2':
             bot2Wins += 1
-        print('bot1Wins', bot1Wins, 'bot2Wins', bot2Wins)
+        print('bot1Wins', bot1Wins, 'bot2Wins', bot2Wins, file=sys.stderr)
 
     """
     i = 0

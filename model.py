@@ -110,7 +110,7 @@ class TrainedModel:
 
     #uses the cached expValue if possible
     #otherwise generates it, adds it to cache
-    def getExpValue(self, stateHash=None, stateObj=None, action1=None, action2=None, bulk_input=None):
+    def OLDgetExpValue(self, stateHash=None, stateObj=None, action1=None, action2=None, bulk_input=None):
         if (stateHash, action1, action2) in self.expValueCache:
             return self.expValueCache[(stateHash, action1, action2)]
         value = self.genExpValue(stateHash, stateObj, action1, action2)
@@ -119,7 +119,7 @@ class TrainedModel:
 
 
     #returns the expected value from the network
-    def genExpValue(self, stateHash=None, stateObj=None, action1=None, action2=None, bulk_input=None):
+    def getExpValue(self, stateHash=None, stateObj=None, action1=None, action2=None, bulk_input=None):
         if bulk_input:
             data = [modelInput.toInput(so, a1, a2) for _, so, a1, a2 in bulk_input]
             return self.model.predict(np.array(data))
@@ -159,7 +159,7 @@ class TrainedModel:
             mapFile.write(idMapData)
 
     def loadModel(self, dir, name):
-        self.model = keras.model.load_model(dir + '/' + name + '-model.h5')
+        self.model = keras.models.load_model(dir + '/' + name + '-model.h5')
         self._compile()
         with open(dir + '/' + name + '-map.pickle', 'rb') as mapFile:
             idMapData = mapFile.read()
