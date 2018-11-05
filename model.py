@@ -153,13 +153,13 @@ class TrainedModel:
     #Save and load, also saves/loads the idMap from modeInput
     #dir should not include a trailing /
     def saveModel(self, dir, name):
-        self.model.save(dir + '/' + name + '-model.h5')
+        self.model.save(dir + '/' + name + '-model.h5', include_optimizer=False)
         idMapData = pickle.dumps(modelInput.idMap)
         with open(dir + '/' + name + '-map.pickle', 'wb') as mapFile:
             mapFile.write(idMapData)
 
     def loadModel(self, dir, name):
-        self.model = keras.models.load_model(dir + '/' + name + '-model.h5')
+        self.model = keras.models.load_model(dir + '/' + name + '-model.h5', compile=False)
         self._compile()
         with open(dir + '/' + name + '-map.pickle', 'rb') as mapFile:
             idMapData = mapFile.read()

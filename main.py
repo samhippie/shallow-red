@@ -17,6 +17,7 @@ import modelInput
 import montecarlo.exp3 as exp3
 import montecarlo.rm as rm
 import montecarlo.oos as oos
+import montecarlo.cfr as cfr
 
 humanTeams = [
 
@@ -96,6 +97,11 @@ def getAgent(algo, teams, format, valueModel=None):
                 verbose=False)
     elif algo == 'exp3':
         agent = exp3.Exp3Agent(
+                teams=teams,
+                format=format,
+                verbose=False)
+    elif algo == 'cfr':
+        agent = cfr.CfrAgent(
                 teams=teams,
                 format=format,
                 verbose=False)
@@ -271,7 +277,7 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
 
 #trains a model for the given format with the given teams
 #returns the trained model
-async def trainModel(teams, format, games=100, epochs=100, numProcesses=1, valueModel=None):
+async def trainModel(teams, format, games=100, epochs=100, numProcesses=1, valueModel=None, saveDir=None, saveName=None):
     try:
         searchPs = [await getPSProcess() for p in range(numProcesses)]
 
@@ -296,6 +302,8 @@ async def trainModel(teams, format, games=100, epochs=100, numProcesses=1, value
 
             print('epoch', i, 'training', file=sys.stderr)
             valueModel.train(epochs=10)
+            if saveDir and saveName:
+                valueModel.saveModel(saveDir, saveName)
 
     except:
         raise
@@ -462,20 +470,17 @@ async def main():
     """
 
 
-    #valueModel = await trainModel(teams=teams, format=format, games=100, epochs=10, numProcesses=1)
-    #valueModel.saveModel('/home/sam/scratch/psbot/models', 'kanto')
+    #saveDir = '/home/sam/scratch/psbot/models'
+    #saveName = 'fini'
+    #valueModel = model.TrainedModel(alpha=0.001)
+    #await trainModel(teams=teams, format=format, games=100, epochs=10000, numProcesses=3, valueModel=valueModel, saveDir=saveDir, saveName=saveName)
+    #valueModel.saveModel(saveDir, saveName)
 
-    valueModel = model.TrainedModel()
-    valueModel.loadModel('/home/sam/scratch/psbot/models', 'kanto')
+    #valueModel = model.TrainedModel()
+    #valueModel.loadModel(saveDir, saveName)
+    #valueModel.training = False
 
-    #valueModel = model.BasicModel()
-    #valueModel = model.CombinedModel(trainedModel, basicModel)
-    #await trainModel(teams=teams, format=format, games=100, epochs=100, valueModel=trainedModel)
-    #trainedModel.training = False
-    #valueModel.compare = True
-    #valueModel.t = 1
-    #await humanGame(humanTeams, format='1v1', limit=300)
-    await playTestGame(teams, format=format, limit=20, numProcesses=3, initMoves=initMoves, algo='rm', valueModel=valueModel)
+    await playTestGame(teams, format=format, limit=100, numProcesses=1, initMoves=initMoves, algo='cfr')
 
     return
 

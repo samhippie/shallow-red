@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import random
 import sys
 
 #handles input and output of a single match
@@ -149,6 +150,8 @@ class Game:
             elif line.startswith('|win'):
                 winner = line[5:-1]
 
+                self.winner.set_result(winner)
+
                 if winner == 'bot1':
                     await self.p1Queue.put((Game.END, 1))
                     await self.p2Queue.put((Game.END, -1))
@@ -158,7 +161,6 @@ class Game:
 
                 await self.cmdQueue.put('reset')
                 running = False
-                self.winner.set_result(winner)
 
             #a tie, which usually happens when the game ended early with >forcetie
             #can't just look for '|tie' as '|tier' is a common message
@@ -171,6 +173,26 @@ class Game:
                 await self.cmdQueue.put('reset')
                 running = False
                 self.winner.set_result(winner)
+
+    def getSeed():
+        return [
+            random.random() * 0x10000,
+            random.random() * 0x10000,
+            random.random() * 0x10000,
+            random.random() * 0x10000,
+        ]
+
+    #applies the (seed, action, action) list to the current game
+    #clears out the queues so the game is ready to go
+    async def applyHistory(self, history):
+        for seed, a1, a2 in history:
+            await self.cmdQueue.put('>resetPRNG ' + str(seed))
+
+            await self.p1Queue.get()
+            await self.cmdQueue.put('>p1' + a1)
+
+            await self.p2Queue.get()
+            await self.cmdQueue.put('>p2' + a2)
 
 
 """

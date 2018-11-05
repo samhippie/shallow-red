@@ -13,6 +13,7 @@ import model
 import moves
 
 #Regret Matching
+#I think this is technically Outcome Sampling MCCFR
 
 class RegretMatchAgent:
 
@@ -165,6 +166,26 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
             #need to use the other player's actions
             otherHistory = otherMcData['history' + str(pid)]
 
+            expValueCache = {}
+            inputSet = []
+            #go ahead and get all the expValue inputs that we need
+            for i in range(len(history)):
+                state, stateObj, actionIndex, actions, probs = history[i]
+                action = actions[actionIndex]
+                _, _, otherActionIndex, otherActions, _ = otherHistory[i]
+                otherAction = otherActions[otherActionIndex]
+                for j in range(len(actions)):
+                    if rewardType == 1:
+                        b1, b2 = actions[j], otherAction
+                    else:
+                        b1, b2 = otherAction, actions[j]
+                    inputSet.append((state, stateObj, b1, b2))
+            #calculate all the expValues at once
+            expValueSet = getExpValue(bulk_input=inputSet)
+            for i in range(len(inputSet)):
+                state, _, b1, b2 = inputSet[i]
+                expValueCache[(state, b1, b2)] = expValueSet[i][0]
+
             #update probTable with our history + result
             reward = request[1]
             #rescale reward from [-1,1] to [0,1]
@@ -190,7 +211,10 @@ async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, forma
                         else:
                             b1, b2 = otherAction, actions[j]
                         #get the expected value of the action
-                        expValue = getExpValue(state, stateObj, b1, b2)
+                        if (state, b1, b2) in expValueCache:
+                            expValue = expValueCache[(state, b1, b2)]
+                        else:
+                            expValue = getExpValue(state, stateObj, b1, b2)
                         if expValue != None and rewardType == 2:
                             expValue = 1 - expValue
                         if expValue == None:
@@ -225,8 +249,6 @@ async def mcSearchRM(ps, format, teams, mcData, limit=100,
         seed=None, p1InitActions=[], p2InitActions=[], pid=0,
         initExpVal=0, posReg=True, probScaling=0, regScaling=0, verbose=False):
 
-    if p1InitActions:
-        print(p1InitActions, p2InitActions)
     print(end='', file=sys.stderr)
     for i in range(limit):
         print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
