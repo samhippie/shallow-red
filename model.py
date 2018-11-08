@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 
+#loading tf is slow, so don't do it unless we're using it
+USE_TENSORFLOW = False
+
 import collections
 import numpy as np
 import os
 import pickle
-import tensorflow as tf
-from tensorflow import keras
+
+if USE_TENSORFLOW:
+    import tensorflow as tf
+    from tensorflow import keras
+
+    os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 import modelInput
 
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 #used to compare a trained model to a basic model for the same inputs
 #can also be used if we want to train a model using the behavior of a basic model

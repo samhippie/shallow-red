@@ -2,6 +2,7 @@
 
 import asyncio
 import collections
+from contextlib import suppress
 import copy
 import math
 import numpy as np
@@ -18,6 +19,53 @@ import montecarlo.exp3 as exp3
 import montecarlo.rm as rm
 import montecarlo.oos as oos
 import montecarlo.cfr as cfr
+
+
+#putting this up top for convenience
+def getAgent(algo, teams, format, valueModel=None):
+    if algo == 'rm':
+        agent = rm.RegretMatchAgent(
+                teams=teams,
+                format=format,
+                posReg=True,
+                probScaling=2,
+                regScaling=1.5,
+                valueModel=valueModel,
+                verbose=False)
+    elif algo == 'oos':
+        agent = oos.OnlineOutcomeSamplingAgent(
+                teams=teams,
+                format=format,
+                #posReg=True,
+                #probScaling=2,
+                #regScaling=1.5,
+                verbose=False)
+    elif algo == 'exp3':
+        agent = exp3.Exp3Agent(
+                teams=teams,
+                format=format,
+                verbose=False)
+    elif algo == 'cfr':
+        agent = cfr.CfrAgent(
+                teams=teams,
+                format=format,
+
+                samplingType=cfr.AVERAGE,
+                exploration=0.1,
+                bonus=0,
+                threshold=1,
+                bound=3,
+
+                #posReg=True,
+                #probScaling=2,
+                #regScaling=1.5,
+
+                depthLimit=3,
+                verbose=False)
+    return agent
+
+
+
 
 humanTeams = [
 
@@ -77,68 +125,42 @@ tvtTeams = [
 PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
 PS_ARG = 'simulate-battle'
 
-def getAgent(algo, teams, format, valueModel=None):
-    if algo == 'rm':
-        agent = rm.RegretMatchAgent(
-                teams=teams,
-                format=format,
-                posReg=True,
-                probScaling=2,
-                regScaling=1.5,
-                valueModel=valueModel,
-                verbose=False)
-    elif algo == 'oos':
-        agent = oos.OnlineOutcomeSamplingAgent(
-                teams=teams,
-                format=format,
-                #posReg=True,
-                #probScaling=2,
-                #regScaling=1.5,
-                verbose=False)
-    elif algo == 'exp3':
-        agent = exp3.Exp3Agent(
-                teams=teams,
-                format=format,
-                verbose=False)
-    elif algo == 'cfr':
-        agent = cfr.CfrAgent(
-                teams=teams,
-                format=format,
-                verbose=False)
-    return agent
 
-
-
-async def playRandomGame(teams, format, ps=None):
+async def playRandomGame(teams, format, ps=None, initMoves=[[],[]], seed=None):
     if not ps:
         ps = await getPSProcess()
-    seed = [
-        random.random() * 0x10000,
-        random.random() * 0x10000,
-        random.random() * 0x10000,
-        random.random() * 0x10000,
-    ]
+    if not seed:
+        seed = [
+            random.random() * 0x10000,
+            random.random() * 0x10000,
+            random.random() * 0x10000,
+            random.random() * 0x10000,
+        ]
 
-    game = Game(ps, format=format, teams=teams, seed=[0,0,0,0], verbose=True)
+    game = Game(ps, format=format, teams=teams, seed=seed, verbose=True)
 
-    async def randomAgent(queue, cmdHeader):
+    async def randomAgent(queue, cmdHeader, initMoveList):
         while True:
             req = await queue.get()
             if req[0] == Game.END:
                 break
 
-            print('getting actions')
+            #print('getting actions')
             actions = moves.getMoves(format, req[1])
             state = req[1]['state']
-            print(cmdHeader, 'actions', actions)
+            #print(cmdHeader, 'actions', actions)
 
-            action = random.choice(actions)
+            if len(initMoveList) > 0:
+                action = initMoveList[0]
+                del initMoveList[0]
+            else:
+                action = random.choice(actions)
             print(cmdHeader, 'picked', action)
             await game.cmdQueue.put(cmdHeader + action)
 
     await game.startGame()
-    gameTask = asyncio.gather(randomAgent(game.p1Queue, '>p1'),
-            randomAgent(game.p2Queue, '>p2'))
+    gameTask = asyncio.gather(randomAgent(game.p1Queue, '>p1', initMoves[0]),
+            randomAgent(game.p2Queue, '>p2', initMoves[1]))
     asyncio.ensure_future(gameTask)
     winner = await game.winner
     gameTask.cancel()
@@ -149,7 +171,7 @@ async def playRandomGame(teams, format, ps=None):
 #plays two separately trained agents
 #I just copied and pasted playTestGame and duplicated all the search functions
 #so expect this to take twice as long as playTestGame with the same parameters
-async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses1=1, numProcesses2=1, algo1='rm', algo2='rm', file=sys.stdout, initMoves=([],[]), valueModel1=None, valueModel2=None, concurrent=False):
+async def playCompGame(teams, limit1=100, limit2=100, time1=None, time2=None, format='1v1', numProcesses1=1, numProcesses2=1, algo1='rm', algo2='rm', file=sys.stdout, initMoves=([],[]), valueModel1=None, valueModel2=None, concurrent=False):
     try:
 
         mainPs = await getPSProcess()
@@ -163,6 +185,11 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
             random.random() * 0x10000,
             random.random() * 0x10000,
         ]
+
+        if time1:
+            limit1 = 100000000
+        if time2:
+            limit2 = 100000000
 
         game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
@@ -181,6 +208,8 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
             #actions taken so far by in the actual game
             p1Actions = []
             p2Actions = []
+            nonlocal searchPs1
+            nonlocal searchPs2
             while True:
                 i += 1
                 print('starting turn', i, file=sys.stderr)
@@ -206,11 +235,37 @@ async def playCompGame(teams, limit1=100, limit2=100, format='1v1', numProcesses
                                 seed=seed)
                         searches2.append(search2)
 
-                    if concurrent:
+                    if concurrent and time1 == None and time2 == None:
                         await asyncio.gather(*searches1, *searches2)
+                    elif time1 and time2:
+                        #there's a timeout function, but I got this working first
+                        searchTask = asyncio.ensure_future(asyncio.gather(*searches1))
+                        await asyncio.sleep(time1)
+                        searchTask.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await searchTask
+
+                        searchTask = asyncio.ensure_future(asyncio.gather(*searches2))
+                        await asyncio.sleep(time2)
+                        searchTask.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await searchTask
+
+                        #restart the search processes just to clean things up
+                        #for ps in searchPs1 + searchPs2:
+                            #ps.terminate
+                        #searchPs1 = [await getPSProcess() for i in range(numProcesses1)]
+                        #searchPs2 = [await getPSProcess() for i in range(numProcesses2)]
+
                     else:
                         await asyncio.gather(*searches1)
                         await asyncio.gather(*searches2)
+
+                    #restart the search processes just to clean things up
+                    for ps in searchPs1 + searchPs2:
+                        ps.terminate()
+                    searchPs1 = [await getPSProcess() for i in range(numProcesses1)]
+                    searchPs2 = [await getPSProcess() for i in range(numProcesses2)]
 
                     #let the agents combine and purge data
                     print('combining', file=sys.stderr)
@@ -314,23 +369,27 @@ async def trainModel(teams, format, games=100, epochs=100, numProcesses=1, value
     return valueModel
 
 
-async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueModel=None, algo='rm', file=sys.stdout, initMoves=([],[])):
+async def playTestGame(teams, limit=100, time=None, format='1v1', seed=None, numProcesses=1, valueModel=None, algo='rm', file=sys.stdout, initMoves=([],[])):
     try:
 
         mainPs = await getPSProcess()
 
         searchPs = [await getPSProcess() for i in range(numProcesses)]
 
-        seed = [
-            random.random() * 0x10000,
-            random.random() * 0x10000,
-            random.random() * 0x10000,
-            random.random() * 0x10000,
-        ]
+        if not seed:
+            seed = [
+                random.random() * 0x10000,
+                random.random() * 0x10000,
+                random.random() * 0x10000,
+                random.random() * 0x10000,
+            ]
 
         game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
         agent = getAgent(algo, teams, format, valueModel)
+
+        if time:
+            limit = 100000
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03
@@ -364,7 +423,17 @@ async def playTestGame(teams, limit=100, format='1v1', numProcesses=1, valueMode
                         searches.append(search)
 
 
-                    await asyncio.gather(*searches)
+                    #there's a timeout function, but I got this working first
+                    if time:
+                        searchTask = asyncio.ensure_future(asyncio.gather(*searches))
+                        await asyncio.sleep(time)
+                        searchTask.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await searchTask
+
+                    else:
+                        await asyncio.gather(*searches)
+
 
                     #let the agents combine and purge data
                     print('combining', file=sys.stderr)
@@ -430,17 +499,17 @@ async def getPSProcess():
             stdout=subprocess.PIPE)
 
 async def main():
-    format = '1v1'
-    #format = '2v2doubles'
+    #format = '1v1'
+    format = '2v2doubles'
     #format='singles'
     #format='vgc'
 
     #teams = (singlesTeams[0], singlesTeams[1])
     #gen 1 starters mirror
-    teams = (ovoTeams[4], ovoTeams[4])
+    #teams = (ovoTeams[4], ovoTeams[4])
 
     #groudon vs lunala vgv19
-    #teams = (tvtTeams[3], tvtTeams[4])
+    teams = (tvtTeams[3], tvtTeams[4])
     #fini vs koko vgc17
     #teams = (tvtTeams[1], tvtTeams[5])
 
@@ -454,9 +523,9 @@ async def main():
     #teams = (tvtTeams[1], tvtTeams[6])
     #initMoves = ([' team 21'], [' team 12'])
 
-    #initMoves = ([' team 12'], [' team 12'])
+    initMoves = ([' team 12'], [' team 12'])
     #initMoves = ([' team 1'], [' team 1'])
-    initMoves = ([], [])
+    #initMoves = ([], [])
 
     #teams = (ovoTeams[5], ovoTeams[5])
     #initMoves = ([' team 2'], [' team 2'])
@@ -480,28 +549,22 @@ async def main():
     #valueModel.loadModel(saveDir, saveName)
     #valueModel.training = False
 
-    await playTestGame(teams, format=format, limit=100, numProcesses=1, initMoves=initMoves, algo='cfr')
+    await playTestGame(teams, format=format, limit=1000, numProcesses=3, initMoves=initMoves, algo='cfr')
 
     return
 
-    limit1 = 500
-    numProcesses1 = 3
-    algo1 = 'oos'
 
-    limit2 = 300
+    limit1 = 100
+    numProcesses1 = 3
+    algo1 = 'cfr'
+
+    limit2 = 100
     numProcesses2 = 3
     algo2 = 'rm'
 
-    bot1Wins = 0
-    bot2Wins = 0
-    for i in range(20):
-        with open(os.devnull, 'w') as devnull:
-            result = await playCompGame(teams, format=format, limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, algo1=algo1, algo2=algo2, initMoves=initMoves, concurrent=False)#, file=devnull)
-        if result == 'bot1':
-            bot1Wins += 1
-        elif result == 'bot2':
-            bot2Wins += 1
-        print('bot1Wins', bot1Wins, 'bot2Wins', bot2Wins, file=sys.stderr)
+    with open(os.devnull, 'w') as devnull:
+        result = await playCompGame(teams, format=format, limit1=limit1, limit2=limit2, numProcesses1=numProcesses1, numProcesses2=numProcesses2, algo1=algo1, algo2=algo2, initMoves=initMoves, concurrent=False, file=devnull)
+        print(result, flush=True)
 
     """
     i = 0

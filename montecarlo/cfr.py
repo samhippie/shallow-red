@@ -12,13 +12,43 @@ from game import Game
 import model
 import moves
 
-#MCCFR with External Sampling (might be Average Sampling later)
+#MCCFR with either External Sampling or Average Sampling
+
+EXTERNAL = 1
+AVERAGE = 2
 
 class CfrAgent:
-    def __init__(self, teams, format, verbose=False):
+    #AS parameters:
+    #exploration gives all action a chance to be taken
+    #bonus is for early exploration
+    #threshold is so any action with prob > 1/threshold is always taken
+    #bound is the maximum number of actions that can be taken, 0 for disabled
+
+    #depth limit (if not None) replaces tree traversal with expValueHeurisitic()
+    def __init__(self, teams, format,
+            samplingType=EXTERNAL, exploration=0, bonus=0, threshold=1, bound=0,
+            posReg=False, probScaling=0, regScaling=0,
+            depthLimit=None, verbose=False):
         self. teams = teams
         self.format = format
+
+        self.samplingType = samplingType
+        self.exploration = exploration
+        self.bonus = bonus
+        self.threshold = threshold
+        self.bound = bound
+
+        self.posReg = posReg
+        self.probScaling = probScaling
+        self.regScaling = regScaling
+
+        self.depthLimit = depthLimit
         self.verbose = verbose
+
+        self.seenStates = {}
+
+        self.numActionsSeen = 0
+        self.numActionsTaken = 0
 
         self.regretTables = [collections.defaultdict(int) for i in range(2)]
         self.probTables = [collections.defaultdict(int) for i in range(2)]
@@ -27,26 +57,37 @@ class CfrAgent:
         #turn init actions into a useful history
         history = [(seed, a1, a2) for a1, a2 in zip(*initActions)]
 
+
         print(end='', file=sys.stderr)
         for i in range(limit):
             print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
             game = Game(ps, self.teams, format=self.format, seed=seed, verbose=self.verbose)
             await game.startGame()
             await game.applyHistory(history)
+            self.numActionsSeen = 0
+            self.numActionsTaken = 0
             await self.cfrRecur(ps, game, seed, history, 1, i)
+            #print('num actions seen:', self.numActionsSeen, file=sys.stderr)
+            #print('num actions taken:', self.numActionsTaken, file=sys.stderr)
+            #print('percentage:', 100 * self.numActionsTaken / max(1, self.numActionsSeen), file=sys.stderr)
+            #print(file=sys.stderr)
         print(file=sys.stderr)
 
     def combine(self):
-        #TODO see how bad this gets
-        pass
+        #delete probs and regrets for unseen states for both players
+        for i in range(2):
+            keys = list(self.regretTables[i])
+            for state, action in keys:
+                if not state in self.seenStates:
+                    del self.regretTables[i][(state, action)]
+                    if (state, action) in self.probTables[i]:
+                        del self.probTables[i][(state, action)]
+
+        self.seenStates = {}
 
     def getProbs(self, player, state, actions):
         pt = self.probTables[player]
-        rt = self.probTables[player]
         probs = np.array([pt[(state, a)] for a in actions])
-        rt = self.probTables[player]
-        for a in actions:
-            print('player', player, 'action', a, 'regret', rt[(state, a)])
 
         return probs / np.sum(probs)
 
@@ -54,7 +95,11 @@ class CfrAgent:
     #history is a list of (seed, action, action) tuples
     #q is the sample probability
     #assumes the game has already had the history applied
-    async def cfrRecur(self, ps, game, startSeed, history, q, iter):
+    async def cfrRecur(self, ps, game, startSeed, history, q, iter, depth=0):
+        #print('entering with history', history, file=sys.stderr)
+        #I'm not sure about this q parameter
+        #I'm getting better results setting it to 1 in all games
+        q = 1
         async def endGame():
             side = 'bot1' if iter % 2 == 0 else 'bot2'
             winner = await game.winner
@@ -64,7 +109,7 @@ class CfrAgent:
             while not game.p2Queue.empty():
                 await game.p2Queue.get()
             if winner == side:
-                return 1# / q
+                return 1 / q
             else:
                 return 0
 
@@ -79,32 +124,79 @@ class CfrAgent:
             return await endGame()
         req = request[1]
         state = req['stateHash']
+        self.seenStates[state] = True
         actions = moves.getMoves(self.format, req)
         #just sample a move
         probs = self.regretMatch(offPlayer, state, actions)
         offAction = np.random.choice(actions, p=probs)
         #and update average stategy
-        self.updateProbs(offPlayer, state, actions, probs)# / q)
+        self.updateProbs(offPlayer, state, actions, probs / q, iter)
 
         #on player
         request = (await queues[onPlayer].get())
         if request[0] == Game.END:
             return await endGame()
         req = request[1]
+
+        #now that we've checked if the game is over,
+        #let's check depth before continuing
+        if self.depthLimit != None and depth >= self.depthLimit:
+            await game.cmdQueue.put('>forcewin p1')
+            #clean up the end game messages
+            await queues[onPlayer].get()
+            await queues[offPlayer].get()
+            return expValueHeuristic(onPlayer, req['state']) / q
+
+
         state = req['stateHash']
         actions = moves.getMoves(self.format, req)
-        #TODO make this part average sampling
-        probs = self.regretMatch(onPlayer, state, actions)
+        #we sometimes bias towards the first or last actions
+        #this fixes that bias
+        random.shuffle(actions)
+        #probs is the set of sample probabilities, used for traversing
+        #iterProbs is the set of probabilities for this iteration's strategy, used for regret
+        if self.samplingType == EXTERNAL:
+            probs = self.regretMatch(onPlayer, state, actions)
+            iterProbs = probs
+        elif self.samplingType == AVERAGE:
+            iterProbs = self.regretMatch(onPlayer, state, actions)
+            stratSum = 0
+            strats = []
+            pt = self.probTables[onPlayer]
+            for a in actions:
+                s = pt[(state, a)]
+                stratSum += s
+                strats.append(s)
+            probs = []
+            for a,s in zip(actions, strats):
+                if self.bonus + stratSum == 0:
+                    p = 0
+                else:
+                    p = (self.bonus + self.threshold * s) / (self.bonus + stratSum)
+                p = max(self.exploration, p)
+                probs.append(p)
+            numTaken = 0
+
         #get expected reward for each action
         rewards = []
         gameUsed = False
+        self.numActionsSeen += len(actions)
         for action, prob in zip(actions, probs):
+            #for ES we just check every action
+            #for AS use a roll to determine if we search
+            if self.samplingType == AVERAGE:
+                #if we're at the last action and we haven't done anything, do something regardless of roll
+                if (self.bound != 0 and numTaken > self.bound) or random.random() >= prob and (action != actions[-1] or gameUsed):
+                    rewards.append(0)
+                    continue
+                numTaken += 1
+            self.numActionsTaken += 1
             #don't have to re-init game for the first action
             if gameUsed:
                 game = Game(ps, self.teams, format=self.format, seed=startSeed, verbose=self.verbose)
                 await game.startGame()
                 await game.applyHistory(history)
-                #need to eat two requests, as we got two above
+                #need to consume two requests, as we consumed two above
                 await game.p1Queue.get()
                 await game.p2Queue.get()
             else:
@@ -120,20 +212,28 @@ class CfrAgent:
                 offHeader = '>p1'
                 historyEntry = (seed, offAction, action)
 
+            #print('trying', historyEntry)
+
             await game.cmdQueue.put('>resetPRNG ' + str(seed))
             await game.cmdQueue.put(onHeader + action)
             await game.cmdQueue.put(offHeader + offAction)
 
-            r = await self.cfrRecur(ps, game, startSeed, history + [historyEntry], q * min(1, max(0.01, prob)), iter)
+            r = await self.cfrRecur(ps, game, startSeed, history + [historyEntry], q * min(1, max(0.01, prob)), iter, depth+1)
             rewards.append(r)
 
         #update regrets
         stateExpValue = 0
-        for p,r in zip(probs, rewards):
+        for p,r in zip(iterProbs, rewards):
             stateExpValue += p * r
         rt = self.regretTables[onPlayer]
         for a,r in zip(actions, rewards):
-            rt[(state, a)] += r - stateExpValue
+            regret = rt[(state, a)]
+            if self.regScaling != 0:
+                regret *= ((iter//2 + 1)**self.regScaling) / ((iter//2 + 1)**self.regScaling + 1)
+            if self.posReg:
+                rt[(state, a)] = max(0, regret + r - stateExpValue)
+            else:
+                rt[(state, a)] = regret + r - stateExpValue
 
         return stateExpValue
 
@@ -146,7 +246,24 @@ class CfrAgent:
         return regrets / rSum if rSum > 0 else np.array([1/len(actions) for a in actions])
 
     #updates the average strategy for the player
-    def updateProbs(self, player, state, actions, probs):
+    def updateProbs(self, player, state, actions, probs, iter):
         pt = self.probTables[player]
+        probScale = ((iter//2 + 1) / (iter//2 + 2))**self.probScaling
         for a, p in zip(actions, probs):
-            pt[(state, a)] += p
+            oldProb = pt[(state, a)]
+            pt[(state, a)] = oldProb * probScale + p
+
+#returns a value in [0,1] that is a heuristic for the expected value
+def expValueHeuristic(player, stateObj):
+    #ratio of player's hp percentage to combined hp percentage
+    #laplace prior ignorance applied (not sure what the proper term is)
+    totalHp = 2
+    playerHp = 1
+    for i in range(2):
+        mons = stateObj['players'][i]['mons']
+        hpSum = sum([mons[id]['hp'] for id in mons])
+        if i == player:
+            playerHp += hpSum
+        totalHp += hpSum
+    return playerHp / totalHp
+
