@@ -14,8 +14,14 @@ import moves
 
 #MCCFR with either External Sampling or Average Sampling
 
+#sampling types
 EXTERNAL = 1
 AVERAGE = 2
+
+#early state evaluation types
+HEURISTIC = 1
+ROLLOUT = 2
+MODEL = 3
 
 class CfrAgent:
     #AS parameters:
@@ -24,11 +30,13 @@ class CfrAgent:
     #threshold is so any action with prob > 1/threshold is always taken
     #bound is the maximum number of actions that can be taken, 0 for disabled
 
-    #depth limit (if not None) replaces tree traversal with expValueHeurisitic()
+    #depth limit (if not None) replaces tree traversal with evaluation option
+    #evaluation: HEURISTIC is expValueHeurisitic(), rollout does a rollout, model uses an evalModel (to be implemented)
     def __init__(self, teams, format,
             samplingType=EXTERNAL, exploration=0, bonus=0, threshold=1, bound=0,
             posReg=False, probScaling=0, regScaling=0,
-            depthLimit=None, verbose=False):
+            depthLimit=None, evaluation=HEURISTIC, evalModel=None,
+            verbose=False):
         self. teams = teams
         self.format = format
 
@@ -43,6 +51,9 @@ class CfrAgent:
         self.regScaling = regScaling
 
         self.depthLimit = depthLimit
+        self.evaluation = evaluation
+        self.evalModel = evalModel
+
         self.verbose = verbose
 
         self.seenStates = {}
@@ -95,7 +106,7 @@ class CfrAgent:
     #history is a list of (seed, action, action) tuples
     #q is the sample probability
     #assumes the game has already had the history applied
-    async def cfrRecur(self, ps, game, startSeed, history, q, iter, depth=0):
+    async def cfrRecur(self, ps, game, startSeed, history, q, iter, depth=0, rollout=False):
         #print('entering with history', history, file=sys.stderr)
         #I'm not sure about this q parameter
         #I'm getting better results setting it to 1 in all games
@@ -126,11 +137,15 @@ class CfrAgent:
         state = req['stateHash']
         self.seenStates[state] = True
         actions = moves.getMoves(self.format, req)
-        #just sample a move
-        probs = self.regretMatch(offPlayer, state, actions)
-        offAction = np.random.choice(actions, p=probs)
-        #and update average stategy
-        self.updateProbs(offPlayer, state, actions, probs / q, iter)
+        if rollout:
+            #we're going on a ride
+            offAction = np.random.choice(actions)
+        else:
+            #just sample a move
+            probs = self.regretMatch(offPlayer, state, actions)
+            offAction = np.random.choice(actions, p=probs)
+            #and update average stategy
+            self.updateProbs(offPlayer, state, actions, probs / q, iter)
 
         #on player
         request = (await queues[onPlayer].get())
@@ -141,11 +156,18 @@ class CfrAgent:
         #now that we've checked if the game is over,
         #let's check depth before continuing
         if self.depthLimit != None and depth >= self.depthLimit:
-            await game.cmdQueue.put('>forcewin p1')
-            #clean up the end game messages
-            await queues[onPlayer].get()
-            await queues[offPlayer].get()
-            return expValueHeuristic(onPlayer, req['state']) / q
+            if self.evaluation == HEURISTIC:
+                await game.cmdQueue.put('>forcewin p1')
+                #clean up the end game messages
+                await queues[onPlayer].get()
+                await queues[offPlayer].get()
+                return expValueHeuristic(onPlayer, req['state']) / q
+            elif self.evaluation == ROLLOUT:
+                rollout = True
+                #rest of rollout is implemented with the normal code path
+            elif self.evaluation == MODEL:
+                #TODO
+                pass
 
 
         state = req['stateHash']
@@ -155,7 +177,10 @@ class CfrAgent:
         random.shuffle(actions)
         #probs is the set of sample probabilities, used for traversing
         #iterProbs is the set of probabilities for this iteration's strategy, used for regret
-        if self.samplingType == EXTERNAL:
+        if rollout:
+            actions = actions[0:1]
+            probs = [1] # would it be better to use the actual probability?
+        elif self.samplingType == EXTERNAL:
             probs = self.regretMatch(onPlayer, state, actions)
             iterProbs = probs
         elif self.samplingType == AVERAGE:
@@ -185,6 +210,8 @@ class CfrAgent:
             #for ES we just check every action
             #for AS use a roll to determine if we search
             if self.samplingType == AVERAGE:
+                #TODO instead of skipping, try making the skipped entries a rollout
+                #like in https://www.aaai.org/ocs/index.php/AAAI/AAAI12/paper/viewFile/4937/5469
                 #if we're at the last action and we haven't done anything, do something regardless of roll
                 if (self.bound != 0 and numTaken > self.bound) or random.random() >= prob and (action != actions[-1] or gameUsed):
                     rewards.append(0)
@@ -218,7 +245,7 @@ class CfrAgent:
             await game.cmdQueue.put(onHeader + action)
             await game.cmdQueue.put(offHeader + offAction)
 
-            r = await self.cfrRecur(ps, game, startSeed, history + [historyEntry], q * min(1, max(0.01, prob)), iter, depth+1)
+            r = await self.cfrRecur(ps, game, startSeed, history + [historyEntry], q * min(1, max(0.01, prob)), iter, depth=depth+1, rollout=rollout)
             rewards.append(r)
 
         #update regrets
