@@ -56,9 +56,9 @@ def getAgent(algo, teams, format, valueModel=None):
                 threshold=1,
                 bound=3,
 
-                #posReg=True,
-                #probScaling=2,
-                #regScaling=1.5,
+                posReg=False,
+                probScaling=1,
+                regScaling=1,
 
                 depthLimit=3,
                 evaluation=cfr.ROLLOUT,
@@ -299,7 +299,11 @@ async def playCompGame(teams, limit1=100, limit2=100, time1=None, time2=None, fo
                         probs = agents[num].getProbs(num, state, actions)
                         #remove low probability moves, likely just noise
                         normProbs = np.array([p if p > probCutoff else 0 for p in probs])
-                        normProbs = normProbs / np.sum(normProbs)
+                        normSum = np.sum(normProbs)
+                        if normSum > 0:
+                            normProbs = normProbs / np.sum(normProbs)
+                        else:
+                            normProbs = [1 / len(actions) for a in actions]
 
                         for j in range(len(actions)):
                             actionString = moves.prettyPrintMove(actions[j], request[1])
@@ -464,7 +468,11 @@ async def playTestGame(teams, limit=100, time=None, format='1v1', seed=None, num
                         probs = agent.getProbs(num, state, actions)
                         #remove low probability moves, likely just noise
                         normProbs = np.array([p if p > probCutoff else 0 for p in probs])
-                        normProbs = normProbs / np.sum(normProbs)
+                        normSum = np.sum(normProbs)
+                        if normSum > 0:
+                            normProbs = normProbs / np.sum(normProbs)
+                        else:
+                            normProbs = [1 / len(actions) for a in actions]
 
                         for j in range(len(actions)):
                             actionString = moves.prettyPrintMove(actions[j], request[1])
@@ -501,19 +509,19 @@ async def getPSProcess():
             stdout=subprocess.PIPE)
 
 async def main():
-    #format = '1v1'
-    format = '2v2doubles'
+    format = '1v1'
+    #format = '2v2doubles'
     #format='singles'
     #format='vgc'
 
     #teams = (singlesTeams[0], singlesTeams[1])
     #gen 1 starters mirror
-    #teams = (ovoTeams[4], ovoTeams[4])
+    teams = (ovoTeams[4], ovoTeams[4])
 
     #groudon vs lunala vgv19
     #teams = (tvtTeams[3], tvtTeams[4])
     #fini vs koko vgc17
-    teams = (tvtTeams[1], tvtTeams[5])
+    #teams = (tvtTeams[1], tvtTeams[5])
 
     #vgc19 scarf kyogre mirror
     #teams = (vgcTeams[0], vgcTeams[0])
@@ -525,9 +533,9 @@ async def main():
     #teams = (tvtTeams[1], tvtTeams[6])
     #initMoves = ([' team 21'], [' team 12'])
 
-    initMoves = ([' team 12'], [' team 12'])
+    #initMoves = ([' team 12'], [' team 12'])
     #initMoves = ([' team 1'], [' team 1'])
-    #initMoves = ([], [])
+    initMoves = ([], [])
 
     #teams = (ovoTeams[5], ovoTeams[5])
     #initMoves = ([' team 2'], [' team 2'])
@@ -551,9 +559,9 @@ async def main():
     #valueModel.loadModel(saveDir, saveName)
     #valueModel.training = False
 
-    await playTestGame(teams, format=format, limit=200, numProcesses=3, initMoves=initMoves, algo='cfr')
+    #await playTestGame(teams, format=format, limit=100, numProcesses=3, initMoves=initMoves, algo='cfr')
 
-    return
+    #return
 
 
     limit1 = 100

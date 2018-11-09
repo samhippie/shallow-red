@@ -60,7 +60,11 @@ class RegretMatchAgent:
     def getProbs(self, player, state, actions):
         probTable = self.mcData[player]['probTable']
         probs = np.array([probTable[(state, action)] for action in actions])
-        return probs / np.sum(probs)
+        pSum = np.sum(probs)
+        if pSum > 0:
+            return probs / pSum
+        else:
+            return np.array([1 / len(actions) for a in actions])
 
     def combine(self):
         self.mcData = combineRMData([self.mcData], self.valueModel)[0]

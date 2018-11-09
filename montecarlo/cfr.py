@@ -99,8 +99,11 @@ class CfrAgent:
     def getProbs(self, player, state, actions):
         pt = self.probTables[player]
         probs = np.array([pt[(state, a)] for a in actions])
-
-        return probs / np.sum(probs)
+        pSum = np.sum(probs)
+        if pSum > 0:
+            return probs / np.sum(probs)
+        else:
+            return np.array([1 / len(actions) for a in actions])
 
     #recursive implementation of cfr
     #history is a list of (seed, action, action) tuples
