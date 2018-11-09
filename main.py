@@ -501,19 +501,19 @@ async def getPSProcess():
             stdout=subprocess.PIPE)
 
 async def main():
-    format = '1v1'
-    #format = '2v2doubles'
+    #format = '1v1'
+    format = '2v2doubles'
     #format='singles'
     #format='vgc'
 
     #teams = (singlesTeams[0], singlesTeams[1])
     #gen 1 starters mirror
-    teams = (ovoTeams[4], ovoTeams[4])
+    #teams = (ovoTeams[4], ovoTeams[4])
 
     #groudon vs lunala vgv19
     #teams = (tvtTeams[3], tvtTeams[4])
     #fini vs koko vgc17
-    #teams = (tvtTeams[1], tvtTeams[5])
+    teams = (tvtTeams[1], tvtTeams[5])
 
     #vgc19 scarf kyogre mirror
     #teams = (vgcTeams[0], vgcTeams[0])
@@ -525,8 +525,8 @@ async def main():
     #teams = (tvtTeams[1], tvtTeams[6])
     #initMoves = ([' team 21'], [' team 12'])
 
-    #initMoves = ([' team 12'], [' team 12'])
-    initMoves = ([' team 1'], [' team 1'])
+    initMoves = ([' team 12'], [' team 12'])
+    #initMoves = ([' team 1'], [' team 1'])
     #initMoves = ([], [])
 
     #teams = (ovoTeams[5], ovoTeams[5])
@@ -551,7 +551,7 @@ async def main():
     #valueModel.loadModel(saveDir, saveName)
     #valueModel.training = False
 
-    await playTestGame(teams, format=format, limit=100, numProcesses=3, initMoves=initMoves, algo='cfr')
+    await playTestGame(teams, format=format, limit=200, numProcesses=3, initMoves=initMoves, algo='cfr')
 
     return
 

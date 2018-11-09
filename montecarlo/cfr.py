@@ -107,7 +107,6 @@ class CfrAgent:
     #q is the sample probability
     #assumes the game has already had the history applied
     async def cfrRecur(self, ps, game, startSeed, history, q, iter, depth=0, rollout=False):
-        #print('entering with history', history, file=sys.stderr)
         #I'm not sure about this q parameter
         #I'm getting better results setting it to 1 in all games
         q = 1
@@ -137,15 +136,11 @@ class CfrAgent:
         state = req['stateHash']
         self.seenStates[state] = True
         actions = moves.getMoves(self.format, req)
-        if rollout:
-            #we're going on a ride
-            offAction = np.random.choice(actions)
-        else:
-            #just sample a move
-            probs = self.regretMatch(offPlayer, state, actions)
-            offAction = np.random.choice(actions, p=probs)
-            #and update average stategy
-            self.updateProbs(offPlayer, state, actions, probs / q, iter)
+        #just sample a move
+        probs = self.regretMatch(offPlayer, state, actions)
+        offAction = np.random.choice(actions, p=probs)
+        #and update average stategy
+        self.updateProbs(offPlayer, state, actions, probs / q, iter)
 
         #on player
         request = (await queues[onPlayer].get())
@@ -178,13 +173,22 @@ class CfrAgent:
         #probs is the set of sample probabilities, used for traversing
         #iterProbs is the set of probabilities for this iteration's strategy, used for regret
         if rollout:
-            actions = actions[0:1]
+            #I'm not sure if using regret matching or going uniform random
+            #would be better
+            #my gut says regret matching
+            probs = self.regretMatch(onPlayer, state, actions)
+            action = np.random.choice(actions, p=probs)
+            actions = [action]
             probs = [1] # would it be better to use the actual probability?
+            iterProbs = probs
         elif self.samplingType == EXTERNAL:
             probs = self.regretMatch(onPlayer, state, actions)
             iterProbs = probs
         elif self.samplingType == AVERAGE:
             iterProbs = self.regretMatch(onPlayer, state, actions)
+            #let's try using current iterative strategy instead of average strategy
+            probs = iterProbs + self.exploration
+            """
             stratSum = 0
             strats = []
             pt = self.probTables[onPlayer]
@@ -200,23 +204,30 @@ class CfrAgent:
                     p = (self.bonus + self.threshold * s) / (self.bonus + stratSum)
                 p = max(self.exploration, p)
                 probs.append(p)
+            """
+            #keep track of how many actions we take from this state
             numTaken = 0
 
         #get expected reward for each action
         rewards = []
         gameUsed = False
         self.numActionsSeen += len(actions)
+        #whether a specific action is a rollout
+        curRollout = rollout
         for action, prob in zip(actions, probs):
             #for ES we just check every action
             #for AS use a roll to determine if we search
-            if self.samplingType == AVERAGE:
-                #TODO instead of skipping, try making the skipped entries a rollout
+            if self.samplingType == AVERAGE and not curRollout:
+                #instead of skipping, try making the skipped entries a rollout
                 #like in https://www.aaai.org/ocs/index.php/AAAI/AAAI12/paper/viewFile/4937/5469
                 #if we're at the last action and we haven't done anything, do something regardless of roll
                 if (self.bound != 0 and numTaken > self.bound) or random.random() >= prob and (action != actions[-1] or gameUsed):
-                    rewards.append(0)
-                    continue
-                numTaken += 1
+                    curRollout = True
+                    #rewards.append(0)
+                    #continue
+                else:
+                    curRollout = rollout
+                    numTaken += 1
             self.numActionsTaken += 1
             #don't have to re-init game for the first action
             if gameUsed:
@@ -239,13 +250,11 @@ class CfrAgent:
                 offHeader = '>p1'
                 historyEntry = (seed, offAction, action)
 
-            #print('trying', historyEntry)
-
             await game.cmdQueue.put('>resetPRNG ' + str(seed))
             await game.cmdQueue.put(onHeader + action)
             await game.cmdQueue.put(offHeader + offAction)
 
-            r = await self.cfrRecur(ps, game, startSeed, history + [historyEntry], q * min(1, max(0.01, prob)), iter, depth=depth+1, rollout=rollout)
+            r = await self.cfrRecur(ps, game, startSeed, history + [historyEntry], q * min(1, max(0.01, prob)), iter, depth=depth+1, rollout=curRollout)
             rewards.append(r)
 
         #update regrets
