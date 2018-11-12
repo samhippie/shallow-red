@@ -109,7 +109,11 @@ class RegretMatchAgent:
 
     async def search(self, ps, pid=0, limit=100, seed=None, initActions=[[], []]):
         #turn init actions into a useful history
-        history = [(seed, a1, a2) for a1, a2 in zip(*initActions)]
+        history = [(None, a1, a2) for a1, a2 in zip(*initActions)]
+        #insert the seed in the first turn
+        if len(history) > 0:
+            _, a1, a2 = history[0]
+            history[0] = (seed, a1, a2)
 
         print(end='', file=sys.stderr)
         for i in range(limit):
@@ -130,7 +134,6 @@ class RegretMatchAgent:
     #for getting final action probabilites
     def getProbs(self, player, state, actions):
         pt = self.probTables[player]
-        rt = self.regretTables[player]
         probs = np.array([dictGet(pt, (state, a)) for a in actions])
         pSum = np.sum(probs)
         if pSum > 0:
@@ -142,7 +145,7 @@ class RegretMatchAgent:
     #assumes the game is running and is caught up
     #returns p1's expected reward for the playthrough
     #(which is just the actual reward for rm)
-    async def rmRecur(self, ps, game, startSeed, iter):
+    async def rmRecur(self, ps, game, startSeed, iter, depth=0):
         #end game code is pulled out as either player could
         #see the game is over (really just the first player)
         async def endGame():
@@ -192,7 +195,7 @@ class RegretMatchAgent:
             await game.cmdQueue.put(cmdHeaders[i] + action)
 
         #get the reward so we can update our regrets
-        reward = await self.rmRecur(ps, game, startSeed, iter)
+        reward = await self.rmRecur(ps, game, startSeed, iter, depth=depth+1)
 
         #save the reward
         a1 = playerActions[0][pickedActions[0]]
