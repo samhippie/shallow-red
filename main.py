@@ -30,7 +30,8 @@ def getAgent(algo, teams, format, valueModel=None):
                 posReg=True,
                 probScaling=2,
                 regScaling=1.5,
-                valueModel=valueModel,
+                #tableType=rm.DB,
+                #dbLocation='/home/sam/scratch/psbot/rm-agent.db',
                 verbose=False)
     elif algo == 'oos':
         agent = oos.OnlineOutcomeSamplingAgent(
@@ -57,8 +58,8 @@ def getAgent(algo, teams, format, valueModel=None):
                 bound=3,
 
                 posReg=False,
-                probScaling=1,
-                regScaling=1,
+                probScaling=0,
+                regScaling=0,
 
                 depthLimit=3,
                 evaluation=cfr.ROLLOUT,
@@ -465,6 +466,7 @@ async def playTestGame(teams, limit=100, time=None, format='1v1', seed=None, num
                         state = request[1]['stateHash']
                         actions = moves.getMoves(format, request[1])
 
+                        #TODO make this await consistent
                         probs = agent.getProbs(num, state, actions)
                         #remove low probability moves, likely just noise
                         normProbs = np.array([p if p > probCutoff else 0 for p in probs])
@@ -501,6 +503,9 @@ async def playTestGame(teams, limit=100, time=None, format='1v1', seed=None, num
         mainPs.terminate()
         for ps in searchPs:
             ps.terminate()
+        #a little dirty, not all agents need to be closed
+        if callable(getattr(agent, 'close', None)):
+            agent.close()
 
 
 async def getPSProcess():
@@ -534,8 +539,8 @@ async def main():
     #initMoves = ([' team 21'], [' team 12'])
 
     #initMoves = ([' team 12'], [' team 12'])
-    #initMoves = ([' team 1'], [' team 1'])
-    initMoves = ([], [])
+    initMoves = ([' team 1'], [' team 1'])
+    #initMoves = ([], [])
 
     #teams = (ovoTeams[5], ovoTeams[5])
     #initMoves = ([' team 2'], [' team 2'])
@@ -559,9 +564,9 @@ async def main():
     #valueModel.loadModel(saveDir, saveName)
     #valueModel.training = False
 
-    #await playTestGame(teams, format=format, limit=100, numProcesses=3, initMoves=initMoves, algo='cfr')
+    await playTestGame(teams, format=format, limit=300, numProcesses=3, initMoves=initMoves, algo='rm')
 
-    #return
+    return
 
 
     limit1 = 100

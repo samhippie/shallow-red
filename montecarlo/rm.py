@@ -6,334 +6,282 @@ import copy
 import math
 import numpy as np
 import random
+from sqlitedict import SqliteDict
 import sys
 
 from game import Game
 import model
 import moves
 
-#Regret Matching
-#I think this is technically Outcome Sampling MCCFR
+#MC Regret Matching (technically MCCFR with Outcome Samplingling, I think)
+
+#options for how to store the table
+#memory is faster, but db allows for more data
+MEMORY = 1
+DB = 2
 
 class RegretMatchAgent:
 
-    def __init__(self, teams, format, valueModel=None, gamma=0.3, initExpVal=0, posReg=False, probScaling=0, regScaling=0, verbose=False):
+    #exploration is the probability of taking a random action instead of
+    #following the regret matching distribution
+
+    #initExpVal is the expected value for state-action-actions that haven't
+    #been seen before
+    #the value applies to both players instead of being zero sum
+
+    #DCFR parameters:
+    #posReg is whether when floor cumulative regret at 0 or not
+    #probScaling determines how much to weight to give to later iterations'
+    #contributions to the final strategy's probability
+    #regScaling is like probScaling but for contributions to cumulative regret
+
+    #tableType determines how we store our data
+
+    #dbLocation is the sqlite db file
+    #dbClear is whether to clear the db before running
+    #this should be done if any parameters change, or if we just want a fresh
+    #start
+    def __init__(self, teams, format,
+            exploration=0.3, initExpVal=0,
+            posReg=False, probScaling=0, regScaling=0,
+            tableType=MEMORY,
+            dbLocation='./rm-agent', dbClear=True,
+            verbose=False):
+
         self.teams = teams
         self.format = format
+
+        self.exploration = exploration
         self.initExpVal = initExpVal
+
+        #DCFR parameters
         self.posReg = posReg
         self.probScaling = probScaling
         self.regScaling = regScaling
+
         self.verbose = verbose
 
-        self.valueModel = valueModel if valueModel else model.BasicModel()
+        self.tableType = tableType
 
-        self.mcData = []
-        for i in range(2):
-            data = {
-                'gamma': gamma,
-                'regretTable': collections.defaultdict(int),
-                'probTable': collections.defaultdict(int),
-                'seenStates': {},
-                'addReward': self.valueModel.addReward,
-                'getExpValue': self.valueModel.getExpValue,
-            }
-            self.mcData.append(data)
+        #I'm hardcoding reward and count as tables
+        #There hasn't been enough success with models to justify
+        #abstracting them out
 
-    async def search(self, ps, pid=0, limit=100, seed=None, initActions=[[],[]]):
-        await mcSearchRM(
-                ps,
-                self.format,
-                self.teams,
-                self.mcData,
-                limit=limit,
-                seed=seed,
-                p1InitActions=initActions[0],
-                p2InitActions=initActions[1],
-                pid=pid,
-                initExpVal=self.initExpVal,
-                posReg=self.posReg,
-                probScaling=self.probScaling,
-                regScaling=self.regScaling,
-                verbose=self.verbose)
+        if tableType == MEMORY:
+            self.regretTables = [{}, {}]
+            self.probTables = [{}, {}]
+            self.rewardTable = {}
+            self.countTable = {}
+            self.seenStates = {}
+        elif tableType == DB:
+            #I was planning on leaving autocommit off, but there are some bugs
+            autocommit = True
 
+            #cumulative regret, (state, action) -> regret
+            self.regretTables = []
+            #cumulative probability, (state, action) -> (non-normalized) probability
+            self.probTables = []
+            for i in range(2):
+                self.regretTables.append(
+                    SqliteDict(dbLocation, tablename='regret' + str(i), autocommit=autocommit))
+                self.probTables.append(
+                    SqliteDict(dbLocation, tablename='prob' + str(i), autocommit=autocommit))
+                if dbClear:
+                    self.regretTables[i].clear()
+                    self.probTables[i].clear()
+
+            #cumulative reward, (state, action1, action2) -> p1's cumulative reward
+            self.rewardTable = SqliteDict(dbLocation, tablename='reward', autocommit=autocommit)
+            #count, (state, action1, action2) -> count
+            self.countTable = SqliteDict(dbLocation, tablename='count', autocommit=autocommit)
+
+            if dbClear:
+                self.rewardTable.clear()
+                self.countTable.clear()
+
+    def close(self):
+        if self.tableType == DB:
+            for i in range(2):
+                self.regretTables[i].close()
+                self.probTables[i].close()
+            self.rewardTable.close()
+            self.countTable.close()
+
+    async def search(self, ps, pid=0, limit=100, seed=None, initActions=[[], []]):
+        #turn init actions into a useful history
+        history = [(seed, a1, a2) for a1, a2 in zip(*initActions)]
+
+        print(end='', file=sys.stderr)
+        for i in range(limit):
+            print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
+            game = Game(ps, self.teams, format=self.format, seed=seed, verbose=self.verbose)
+            await game.startGame()
+            await game.applyHistory(history)
+            await self.rmRecur(ps, game, seed, i)
+        print(file=sys.stderr)
+
+    def combine(self):
+        #no need to combine when we're using a DB
+
+        #we should do some purging when we're using memory,
+        #but that would require changing how we index our tables
+        return
+
+    #for getting final action probabilites
     def getProbs(self, player, state, actions):
-        probTable = self.mcData[player]['probTable']
-        probs = np.array([probTable[(state, action)] for action in actions])
+        pt = self.probTables[player]
+        rt = self.regretTables[player]
+        probs = np.array([dictGet(pt, (state, a)) for a in actions])
         pSum = np.sum(probs)
         if pSum > 0:
-            return probs / pSum
+            return probs / np.sum(probs)
         else:
             return np.array([1 / len(actions) for a in actions])
 
-    def combine(self):
-        self.mcData = combineRMData([self.mcData], self.valueModel)[0]
+    #recursive implementation of rm
+    #assumes the game is running and is caught up
+    #returns p1's expected reward for the playthrough
+    #(which is just the actual reward for rm)
+    async def rmRecur(self, ps, game, startSeed, iter):
+        #end game code is pulled out as either player could
+        #see the game is over (really just the first player)
+        async def endGame():
+            winner = await game.winner
+            #have to clear the results out of the queues
+            while not game.p1Queue.empty():
+                await game.p1Queue.get()
+            while not game.p2Queue.empty():
+                await game.p2Queue.get()
+            if winner == 'bot1':
+                return 1
+            else:
+                return 0
 
-
-#RM iteration
-async def mcRMImpl(requestQueue, cmdQueue, cmdHeader, mcData, otherMcData, format, iter=0, initActions=[], pid=0, initExpVal=0, posReg=True, probScaling=0, regScaling=0, verbose=False):
-
-    regretTable = mcData['regretTable']
-    probTable = mcData['probTable']
-    gamma = mcData['gamma']
-    seenStates = mcData['seenStates']
-
-    #these can be managed somewhere else
-    getExpValue = mcData['getExpValue']
-    addReward = mcData['addReward']
-
-    #need to do it this way so
-    #the other player has access to our history
-    #need to keep histories for different processes separate
-    mcData['history' + str(pid)] = []
-    history = mcData['history' + str(pid)]
-
-    #whether we're maximizing or minimizing
-    rewardType = 1 if cmdHeader == '>p1' else 2
-
-    #we're going to be popping off this
-    initActions = copy.deepcopy(initActions)
-
-    running = True
-    inInitActions = True
-    while running:
-        request = await requestQueue.get()
-        if verbose:
-            print(cmdHeader, request)
-
-        if request[0] == Game.REQUEST:
+        cmdHeaders = ['>p1', '>p2']
+        queues = [game.p1Queue, game.p2Queue]
+        #all the actions both players can pick
+        playerActions = [[], []]
+        #the probabilitiy of picking each action
+        playerProbs = [[], []]
+        #the indices of the actions actually picked
+        pickedActions = [0, 0]
+        #both players make their move
+        for i in range(2):
+            request = (await queues[i].get())
+            if request[0] == Game.END:
+                return await endGame()
             req = request[1]
             state = req['stateHash']
-            stateObj = req['state']
-
-            seenStates[state] = True
-            actions = moves.getMoves(format, req)
-
-            #check if we ran out of initActions on the previous turn
-            #if so, we need to change the PRNG
-            if inInitActions and len(initActions) == 0:
-                inInitActions = False
-                #no problem if both players reset the PRNG
-                await cmdQueue.put('>resetPRNG')
-
-            #calculate a probability for each action
-            #need the probs from the initActions so we can update,
-            #so we always calculate this
-            rSum = 0
-            regrets = []
-            for action in actions:
-                regret = regretTable[(state, action)]
-                regrets.append(regret)
-                rSum += max(0, regret)
-            if rSum > 0:
-                #prob according to regret
-                probs = np.array([max(0,r) / rSum for r in regrets])
-                probs = probs / np.sum(probs)
-                #use probs to update strategy
-                #use exploreProbs to sample moves
-                exploreProbs = probs * (1-gamma) + gamma / len(actions)
-            else:
-                #everything is bad, be random
-                probs = [1 / len(actions)] * len(actions)
-                exploreProbs = probs
+            #get rm probs for the actions
+            actions = moves.getMoves(self.format, req)
+            playerActions[i] = actions
+            probs = self.regretMatch(i, state, actions)
+            #add exploration, which adds a chance to play randomly
+            exploreProbs = probs * (1 - self.exploration) + self.exploration / len(probs)
+            playerProbs[i] = probs
+            #and sample one action
+            pickedActions[i] = np.random.choice(len(actions), p=exploreProbs)
 
 
-            if len(initActions) > 0:
-                #blindly pick init action
-                preAction = initActions[0].strip()
-                #find close enough action in list
-                #PS client will generate team preview actions that
-                #are longer than what we expect, but we can just
-                #assume that the equivalent action is a prefix
-                bestActionIndex = 0
-                while bestActionIndex < len(actions):
-                    if preAction.startswith(actions[bestActionIndex].strip()):
-                        break
-                    bestActionIndex += 1
-                bestAction = actions[bestActionIndex]
-                initActions = initActions[1:]
-            else:
-                #pick action based on probs
-                bestActionIndex = np.random.choice(len(actions), p=exploreProbs)
-                bestAction = actions[bestActionIndex]
+        #apply the picked actions to the game
+        seed = Game.getSeed()
+        await game.cmdQueue.put('>resetPRNG ' + str(seed))
+        for i in range(2):
+            pickedAction = pickedActions[i]
+            action = playerActions[i][pickedAction]
+            await game.cmdQueue.put(cmdHeaders[i] + action)
 
-            #save our action
-            history.append((state, stateObj, bestActionIndex, actions, probs))
+        #get the reward so we can update our regrets
+        reward = await self.rmRecur(ps, game, startSeed, iter)
 
-            if verbose:
-                print('picked', cmdHeader + bestAction)
+        #save the reward
+        a1 = playerActions[0][pickedActions[0]]
+        a2 = playerActions[1][pickedActions[1]]
+        self.addReward(state, a1, a2, reward)
 
-            #send out the action
-            await cmdQueue.put(cmdHeader + bestAction)
+        #need to update both players' regret and strategy
+        for i in range(2):
+            #update each action's regret and probability in average strategy
+            rt = self.regretTables[i]
+            pt = self.probTables[i]
+            actions = playerActions[i]
+            for j in range(len(actions)):
+                #update stategy with this iteration's strategy
+                #which just means adding the current probability of each action
+                probScale = ((iter+1) / (iter+2))**self.probScaling
+                prob = dictGet(pt, (state, actions[j]))
+                pt[hash((state, actions[j]))] = probScale * prob + playerProbs[i][j]
 
-        elif request[0] == Game.END:
-            #need to use the other player's actions
-            otherHistory = otherMcData['history' + str(pid)]
+                #immediate regret of picked actions is 0, so just skip
+                if j == pickedActions[i]:
+                    continue
 
-            expValueCache = {}
-            inputSet = []
-            #go ahead and get all the expValue inputs that we need
-            for i in range(len(history)):
-                state, stateObj, actionIndex, actions, probs = history[i]
-                action = actions[actionIndex]
-                _, _, otherActionIndex, otherActions, _ = otherHistory[i]
-                otherAction = otherActions[otherActionIndex]
-                for j in range(len(actions)):
-                    if rewardType == 1:
-                        b1, b2 = actions[j], otherAction
-                    else:
-                        b1, b2 = otherAction, actions[j]
-                    inputSet.append((state, stateObj, b1, b2))
-            #calculate all the expValues at once
-            expValueSet = getExpValue(bulk_input=inputSet)
-            for i in range(len(inputSet)):
-                state, _, b1, b2 = inputSet[i]
-                expValueCache[(state, b1, b2)] = expValueSet[i][0]
+                #get existing regret so we can add to it
+                regret = dictGet(rt, (state, actions[j]))
+                if self.regScaling != 0:
+                    regret *= ((iter+1)**self.regScaling) / ((iter+1)**self.regScaling + 1)
+                #get i's possible action and -i's actual action
+                #in player order
+                if i == 0:
+                    a1 = actions[j]
+                    a2 = playerActions[1][pickedActions[1]]
+                    myReward = reward
+                else:
+                    a1 = playerActions[0][pickedActions[0]]
+                    a2 = actions[j]
+                    myReward = 1 - reward
 
-            #update probTable with our history + result
-            reward = request[1]
-            #rescale reward from [-1,1] to [0,1]
-            reward = (reward + 1) / 2
-            for i in range(len(history)):
-                #get our info
-                state, stateObj, actionIndex, actions, probs = history[i]
-                action = actions[actionIndex]
-                #need the other player's action
-                _, _, otherActionIndex, otherActions, _ = otherHistory[i]
-                otherAction = otherActions[otherActionIndex]
+                #get expected value for the potential turn
+                expValue = self.getExpValue(i, state, a1, a2)
 
-                for j in range(len(actions)):
-                    #update each action's regret
-                    #selected action doesn't have its regret changed
-                    if j != actionIndex:
-                        regret = regretTable[(state, actions[j])]
-                        if regScaling != 0:
-                            regret *= ((iter+1)**regScaling) / ((iter+1)**regScaling + 1)
-                        #need to normalize the action order
-                        if rewardType == 1:
-                            b1, b2 = actions[j], otherAction
-                        else:
-                            b1, b2 = otherAction, actions[j]
-                        #get the expected value of the action
-                        if (state, b1, b2) in expValueCache:
-                            expValue = expValueCache[(state, b1, b2)]
-                        else:
-                            expValue = getExpValue(state, stateObj, b1, b2)
-                        if expValue != None and rewardType == 2:
-                            expValue = 1 - expValue
-                        if expValue == None:
-                            expValue = initExpVal
-                        #network sometimes spits out bad values
-                        expValue = min(1, max(0, expValue))
-                        #use expValue to add regret
-                        if posReg:
-                            regretTable[(state, actions[j])] = max(regret + expValue - reward, 0)
-                        else:
-                            regretTable[(state, actions[j])] = regret + expValue - reward
+                #add immediate regret
+                if self.posReg:
+                    rt[hash((state, actions[j]))] = max(regret + expValue - myReward, 0)
+                else:
+                    rt[hash((state, actions[j]))] = regret + expValue - myReward
 
-                    #update each action's probability
-                    probScale = ((iter+1) / (iter + 2))**probScaling
-                    oldProb = probTable[(state, actions[j])]
-                    probTable[(state, actions[j])] = probScale * oldProb + probs[j]
+        #pass the actual reward up
+        return reward
 
-                #only player 1 updates the rewards
-                #we don't actually use the expected value of the
-                #chosen set of actions, so it doesn't matter
-                #when exactly we update
-                if rewardType == 1:
-                    addReward(state, stateObj, action, otherAction, reward)
+    #generates probabilities for each action
+    def regretMatch(self, player, state, actions):
+        rt = self.regretTables[player]
+        regrets = np.array([max(0, dictGet(rt, (state, a))) for a in actions])
+        rSum = np.sum(regrets)
+        if rSum > 0:
+            return regrets / rSum
+        else:
+            return np.array([1 / len(actions) for a in actions])
 
-            running = False
+    #saves the actual reward so it can be used by getExpValue later
+    def addReward(self, state, a1, a2, reward):
+        rewardSum = dictGet(self.rewardTable, (state, a1, a2))
+        count = dictGet(self.countTable, (state, a1, a2))
 
+        self.rewardTable[hash((state, a1, a2))] = rewardSum + reward
+        self.countTable[hash((state, a1, a2))] = count + 1
 
-#RM loop
-#initExpVal is the initial expected value. 0 and 0.5 both make sense
-#posReg is to enable only having 0 or positive regret
-async def mcSearchRM(ps, format, teams, mcData, limit=100,
-        seed=None, p1InitActions=[], p2InitActions=[], pid=0,
-        initExpVal=0, posReg=True, probScaling=0, regScaling=0, verbose=False):
+    #returns expected reward for the (state, action, action) tuple
+    #which is just the tabular value
+    def getExpValue(self, player, state, a1, a2):
+        reward = dictGet(self.rewardTable, (state, a1, a2))
+        count = dictGet(self.countTable, (state, a1, a2))
+        if count == 0:
+            return self.initExpVal
+        else:
+            expValue = reward / count
+            #player 2 is the minimizing player
+            if player == 1:
+                expValue = 1 - expValue
+            return expValue
 
-    print(end='', file=sys.stderr)
-    for i in range(limit):
-        print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
-        game = Game(ps, teams, format=format, seed=seed, verbose=verbose)
-        await game.startGame()
-        await asyncio.gather(
-                mcRMImpl(game.p1Queue, game.cmdQueue,
-                    ">p1", mcData=mcData[0],
-                    otherMcData = mcData[1], format=format, iter=i,
-                    initActions=p1InitActions, pid=pid, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling, regScaling=regScaling,
-                    verbose=verbose),
-                mcRMImpl(game.p2Queue, game.cmdQueue,
-                    ">p2", mcData=mcData[1],
-                    otherMcData=mcData[0], format=format, iter=i,
-                    initActions=p2InitActions, pid=pid, initExpVal=initExpVal, posReg=posReg, probScaling=probScaling, regScaling=regScaling,
-                    verbose=verbose))
-    print(file=sys.stderr)
+#convenience method, treats dict like defaultdict(int)
+#which is needed for sqlitedict
+#there's probably a better way
+def dictGet(table, key):
+    #sqlite is stricter about keys, so we have to use a hash
+    key = hash(key)
+    if not key in table:
+        table[key] = 0
+    return table[key]
 
-def combineRMData(mcDatasets, valueModel=None):
-    num = len(mcDatasets)
-
-    #record which states were seen in the last iteration
-    seenStates = {}
-    for data in mcDatasets:
-        for j in range(2):
-            seen = data[j]['seenStates']
-            for state in seen:
-                seenStates[state] = True
-
-    if valueModel:
-        valueModel.purge(seenStates)
-
-    if num == 1:
-        #no need to copy data around, just delete it directly
-        data = mcDatasets[0]
-        for j in range(2):
-            probTable = data[j]['probTable']
-            regretTable = data[j]['regretTable']
-            keys = list(probTable)
-            for state, action in keys:
-                if state not in seenStates:
-                    del probTable[(state, action)]
-                    if (state, action) in regretTable:
-                        del regretTable[(state, action)]
-
-        return mcDatasets
-
-
-    #combine data on states that were seen in any search
-    #in the last iteration
-    combMcData = [{
-        'rewardTable': collections.defaultdict(int),
-        'countTable': collections.defaultdict(int),
-        'probTable': collections.defaultdict(int),
-        'regretTable': collections.defaultdict(int),
-        'seenStates': {},
-        'avgGamma': mcDatasets[0][j]['avgGamma'],
-        'gamma': mcDatasets[0][j]['gamma']} for j in range(2)]
-
-    for data in mcDatasets:
-        #add up each agent's probability and regret
-        for j in range(2):
-            probTable = data[j]['probTable']
-            regretTable = data[j]['regretTable']
-            for state, action in probTable:
-                if state in seenStates:
-                    combMcData[j]['probTable'][(state, action)] += probTable[(state, action)]
-                    combMcData[j]['regretTable'][(state, action)] += regretTable[(state, action)]
-
-        #add up the shared counts and rewards
-
-        #these are shared by both agents
-        countTable = data[0]['countTable']
-        rewardTable = data[0]['rewardTable']
-
-        for state, a1, a2 in countTable:
-            if state in seenStates:
-                combMcData[0]['countTable'][(state, a1, a2)] += countTable[(state, a1, a2)]
-                combMcData[0]['rewardTable'][(state, a1, a2)] += rewardTable[(state, a1, a2)]
-        combMcData[1]['countTable'] = combMcData[0]['countTable']
-        combMcData[1]['rewardTable'] = combMcData[0]['rewardTable']
-
-    #copy the combined data back into the datasets
-    return [copy.deepcopy(combMcData) for j in range(num)]
