@@ -184,9 +184,12 @@ class Game:
 
     #applies the (seed, action, action) list to the current game
     #clears out the queues so the game is ready to go
+    #leave seed blank if you don't want to set the seed
+    #(e.g. when following a real game)
     async def applyHistory(self, history):
         for seed, a1, a2 in history:
-            await self.cmdQueue.put('>resetPRNG ' + str(seed))
+            if seed:
+                await self.cmdQueue.put('>resetPRNG ' + str(seed))
 
             await self.p1Queue.get()
             await self.cmdQueue.put('>p1' + a1)
