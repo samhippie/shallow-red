@@ -72,7 +72,6 @@ class RegretMatchAgent:
             self.probTables = [{}, {}]
             self.rewardTable = {}
             self.countTable = {}
-            self.seenStates = {}
         elif tableType == DB:
             #I was planning on leaving autocommit off, but there are some bugs
             autocommit = True
@@ -108,6 +107,16 @@ class RegretMatchAgent:
             self.countTable.close()
 
     async def search(self, ps, pid=0, limit=100, seed=None, initActions=[[], []]):
+
+        #this throws away some good data, but I'm not sure it will matter too much
+        #right now memory usage is our biggest enemy
+        if self.tableType == MEMORY:
+            self.regretTables = [{}, {}]
+            self.probTables = [{}, {}]
+            self.rewardTable = {}
+            self.countTable = {}
+
+
         #turn init actions into a useful history
         history = [(None, a1, a2) for a1, a2 in zip(*initActions)]
         #insert the seed in the first turn
@@ -126,10 +135,7 @@ class RegretMatchAgent:
 
     def combine(self):
         #no need to combine when we're using a DB
-
-        #we should do some purging when we're using memory,
-        #but that would require changing how we index our tables
-        return
+        pass
 
     #for getting final action probabilites
     def getProbs(self, player, state, actions):
