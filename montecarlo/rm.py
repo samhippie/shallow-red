@@ -152,19 +152,6 @@ class RegretMatchAgent:
     #returns p1's expected reward for the playthrough
     #(which is just the actual reward for rm)
     async def rmRecur(self, ps, game, startSeed, iter, depth=0):
-        #end game code is pulled out as either player could
-        #see the game is over (really just the first player)
-        async def endGame():
-            winner = await game.winner
-            #have to clear the results out of the queues
-            while not game.p1Queue.empty():
-                await game.p1Queue.get()
-            while not game.p2Queue.empty():
-                await game.p2Queue.get()
-            if winner == 'bot1':
-                return 1
-            else:
-                return 0
 
         cmdHeaders = ['>p1', '>p2']
         queues = [game.p1Queue, game.p2Queue]
@@ -178,7 +165,17 @@ class RegretMatchAgent:
         for i in range(2):
             request = (await queues[i].get())
             if request[0] == Game.END:
-                return await endGame()
+                winner = await game.winner
+                #have to clear the results out of the queues
+                while not game.p1Queue.empty():
+                    await game.p1Queue.get()
+                while not game.p2Queue.empty():
+                    await game.p2Queue.get()
+                if winner == 'bot1':
+                    return 1
+                else:
+                    return 0
+
             req = request[1]
             state = req['stateHash']
             #get rm probs for the actions
@@ -284,13 +281,4 @@ class RegretMatchAgent:
                 expValue = 1 - expValue
             return expValue
 
-#convenience method, treats dict like defaultdict(int)
-#which is needed for sqlitedict
-#there's probably a better way
-def dictGet(table, key):
-    #sqlite is stricter about keys, so we have to use a hash
-    key = hash(key)
-    if not key in table:
-        table[key] = 0
-    return table[key]
 
