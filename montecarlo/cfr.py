@@ -56,13 +56,20 @@ class CfrAgent:
 
         self.verbose = verbose
 
-        self.seenStates = {}
-
         self.numActionsSeen = 0
         self.numActionsTaken = 0
 
-        self.regretTables = [collections.defaultdict(int) for i in range(2)]
-        self.probTables = [collections.defaultdict(int) for i in range(2)]
+        self.regretTables = [{}, {}]
+        self.probTables = [{}, {}]
+
+    #this is an experimental feature to bootstrap data from a separate agent
+    #this requires that CfrAgent and the other agent use the same internal data format
+    def copyFromAgent(self, other):
+        self.regretTables = other.regretTables
+        #we'll test copying prob tables over if regret tables work
+        #I'm mainly interested in boosting the quality of the off-player's strategy
+        #which is entirely determined by regret
+        #self.probTables = other.probTables
 
     async def search(self, ps, pid=0, limit=100, seed=None, initActions=[[], []]):
         #turn init actions into a useful history
@@ -72,6 +79,9 @@ class CfrAgent:
             _, a1, a2 = history[0]
             history[0] = (seed, a1, a2)
 
+        #purge before we search, this limits the memory usage
+        self.regretTables = [{}, {}]
+        self.probTables = [{}, {}]
 
         print(end='', file=sys.stderr)
         for i in range(limit):
@@ -89,20 +99,13 @@ class CfrAgent:
         print(file=sys.stderr)
 
     def combine(self):
-        #delete probs and regrets for unseen states for both players
-        for i in range(2):
-            keys = list(self.regretTables[i])
-            for state, action in keys:
-                if not state in self.seenStates:
-                    del self.regretTables[i][(state, action)]
-                    if (state, action) in self.probTables[i]:
-                        del self.probTables[i][(state, action)]
-
-        self.seenStates = {}
+        #we'll do our combining and purging before we search
+        pass
 
     def getProbs(self, player, state, actions):
         pt = self.probTables[player]
-        probs = np.array([pt[(state, a)] for a in actions])
+        rt = self.probTables[player]
+        probs = np.array([dictGet(pt, (state, a)) for a in actions])
         pSum = np.sum(probs)
         if pSum > 0:
             return probs / np.sum(probs)
@@ -141,7 +144,6 @@ class CfrAgent:
             return await endGame()
         req = request[1]
         state = req['stateHash']
-        self.seenStates[state] = True
         actions = moves.getMoves(self.format, req)
         #just sample a move
         probs = self.regretMatch(offPlayer, state, actions)
@@ -159,12 +161,15 @@ class CfrAgent:
         #let's check depth before continuing
         if self.depthLimit != None and depth >= self.depthLimit:
             if self.evaluation == HEURISTIC:
+                #immediately return a heuristic-based expected value
                 await game.cmdQueue.put('>forcewin p1')
                 #clean up the end game messages
                 await queues[onPlayer].get()
                 await queues[offPlayer].get()
                 return expValueHeuristic(onPlayer, req['state']) / q
             elif self.evaluation == ROLLOUT:
+                #instead of branching out, find the actual value of a single
+                #play-through and use that as the expected value
                 rollout = True
                 #rest of rollout is implemented with the normal code path
             elif self.evaluation == MODEL:
@@ -192,15 +197,21 @@ class CfrAgent:
             probs = self.regretMatch(onPlayer, state, actions)
             iterProbs = probs
         elif self.samplingType == AVERAGE:
+            #we're just using the current iteration's strategy
+            #it's simple and it seems to work
             iterProbs = self.regretMatch(onPlayer, state, actions)
-            #let's try using current iterative strategy instead of average strategy
             probs = iterProbs + self.exploration
+
+            #this is the average-sampling procedure from some paper
+            #it's designed for a large number of samples, so it doesn't really
+            #work. It expects it to be feasible to try every action for the
+            #on player on some turns, which usually isn't the case
             """
             stratSum = 0
             strats = []
             pt = self.probTables[onPlayer]
             for a in actions:
-                s = pt[(state, a)]
+                s = dictGet(pt, (state, a))
                 stratSum += s
                 strats.append(s)
             probs = []
@@ -270,13 +281,13 @@ class CfrAgent:
             stateExpValue += p * r
         rt = self.regretTables[onPlayer]
         for a,r in zip(actions, rewards):
-            regret = rt[(state, a)]
+            regret = dictGet(rt, (state, a))
             if self.regScaling != 0:
                 regret *= ((iter//2 + 1)**self.regScaling) / ((iter//2 + 1)**self.regScaling + 1)
             if self.posReg:
-                rt[(state, a)] = max(0, regret + r - stateExpValue)
+                rt[hash((state, a))] = max(0, regret + r - stateExpValue)
             else:
-                rt[(state, a)] = regret + r - stateExpValue
+                rt[hash((state, a))] = regret + r - stateExpValue
 
         return stateExpValue
 
@@ -284,7 +295,7 @@ class CfrAgent:
     def regretMatch(self, player, state, actions):
         rt = self.regretTables[player]
         rSum = 0
-        regrets = np.array([max(0, rt[(state, a)]) for a in actions])
+        regrets = np.array([max(0, dictGet(rt, (state, a))) for a in actions])
         rSum = np.sum(regrets)
         return regrets / rSum if rSum > 0 else np.array([1/len(actions) for a in actions])
 
@@ -293,8 +304,8 @@ class CfrAgent:
         pt = self.probTables[player]
         probScale = ((iter//2 + 1) / (iter//2 + 2))**self.probScaling
         for a, p in zip(actions, probs):
-            oldProb = pt[(state, a)]
-            pt[(state, a)] = oldProb * probScale + p
+            oldProb = dictGet(pt, (state, a))
+            pt[hash((state, a))] = oldProb * probScale + p
 
 #returns a value in [0,1] that is a heuristic for the expected value
 def expValueHeuristic(player, stateObj):
@@ -310,3 +321,12 @@ def expValueHeuristic(player, stateObj):
         totalHp += hpSum
     return playerHp / totalHp
 
+#convenience method, treats dict like defaultdict(int)
+#which is needed for sqlitedict
+#there's probably a better way
+def dictGet(table, key):
+    #sqlite is stricter about keys, so we have to use a hash
+    key = hash(key)
+    if not key in table:
+        table[key] = 0
+    return table[key]
