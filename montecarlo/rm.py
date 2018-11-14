@@ -281,4 +281,12 @@ class RegretMatchAgent:
                 expValue = 1 - expValue
             return expValue
 
-
+#convenience method, treats dict like defaultdict(int)
+#which is needed for sqlitedict
+#there's probably a better way
+def dictGet(table, key):
+    #sqlite is stricter about keys, so we have to use a hash
+    key = hash(key)
+    if not key in table:
+        table[key] = 0
+    return table[key]
