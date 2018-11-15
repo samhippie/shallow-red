@@ -412,7 +412,6 @@ async def playTestGame(teams, limit=100, time=None, format='1v1', seed=None, num
                         state = request[1]['stateHash']
                         actions = moves.getMoves(format, request[1])
 
-                        #TODO make this await consistent
                         probs = agent.getProbs(num, state, actions)
                         #remove low probability moves, likely just noise
                         normProbs = np.array([p if p > probCutoff else 0 for p in probs])
