@@ -322,7 +322,16 @@ async def trainModel(teams, format, games=100, epochs=100, numProcesses=1, value
     return valueModel
 
 
-async def playTestGame(teams, limit=100, time=None, format='1v1', seed=None, numProcesses=1, valueModel=None, algo='rm', file=sys.stdout, initMoves=([],[])):
+async def playTestGame(teams, limit=100, time=None,
+        format='1v1', seed=None, initMoves=([],[]),
+        numProcesses=1,
+        valueModel=None, algo='rm',
+        #set bootstrap algo to start training with the bootstrap algorithm, then switch to the main algorithm
+        #right now this only supports bootstrapping with RM and switching to CFR
+        #(which is the only real use case)
+        #also we're only supporting bootstrapping for game-limited searches, not time
+        bootstrapAlgo=None, bootstrapPercentage=10,
+        file=sys.stdout):
     try:
 
         mainPs = await getPSProcess()
@@ -340,6 +349,8 @@ async def playTestGame(teams, limit=100, time=None, format='1v1', seed=None, num
         game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
         agent = getAgent(algo, teams, format, valueModel)
+        if bootstrapAlgo:
+            bootAgent = getAgent(bootstrapAlgo, teams, format)
 
         if time:
             limit = 100000
@@ -364,6 +375,25 @@ async def playTestGame(teams, limit=100, time=None, format='1v1', seed=None, num
 
                 #don't search if we aren't going to use the results
                 if len(initMoves[0]) == 0 or len(initMoves[1]) == 0:
+
+                    #this is a bit messy, but we're just testing so it's
+                    #"temporary"
+                    if bootstrapAlgo:
+                        bootLimit = int(limit * bootstrapPercentage / 100)
+                        searches = []
+                        for j in range(numProcesses):
+                            search = bootAgent.search(
+                                    ps=searchPs[j],
+                                    pid=j,
+                                    limit=bootLimit,
+                                    seed=seed,
+                                    initActions=[p1Actions, p2Actions])
+                            searches.append(search)
+
+                        await asyncio.gather(*searches)
+
+                        agent.copyFromAgent(bootAgent)
+                        bootAgent.combine()
 
                     searches = []
                     for j in range(numProcesses):

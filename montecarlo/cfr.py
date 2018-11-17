@@ -14,6 +14,13 @@ import moves
 
 #MCCFR with either External Sampling or Average Sampling
 
+#TODO deal with purging data between searches in a nicer manner
+#doing it in combine is too early, as combine is called before getProbs
+#but doing it in search is too late, as copyFromAgent is called before search
+#but we shouldn't do it in copyFromAgent as that isn't always used
+#
+#using isClean is dirty but it works
+
 #sampling types
 EXTERNAL = 1
 AVERAGE = 2
@@ -59,12 +66,22 @@ class CfrAgent:
         self.numActionsSeen = 0
         self.numActionsTaken = 0
 
+        #clean means we don't have to clear our tables
+        self.isClean = True
+
         self.regretTables = [{}, {}]
         self.probTables = [{}, {}]
 
     #this is an experimental feature to bootstrap data from a separate agent
     #this requires that CfrAgent and the other agent use the same internal data format
     def copyFromAgent(self, other):
+        #purge before we search, this limits the memory usage
+        #have to do it here as we don't want to purge data that we're
+        #about to copy in
+        self.regretTables = [{}, {}]
+        self.probTables = [{}, {}]
+        self.isClean = True
+
         self.regretTables = other.regretTables
         #we'll test copying prob tables over if regret tables work
         #I'm mainly interested in boosting the quality of the off-player's strategy
@@ -79,10 +96,14 @@ class CfrAgent:
             _, a1, a2 = history[0]
             history[0] = (seed, a1, a2)
 
-        #purge before we search, this limits the memory usage
-        self.regretTables = [{}, {}]
-        self.probTables = [{}, {}]
+        #if we already purged for this turn, don't do it twice
+        #as we might have some useful data loaded in
+        if not self.isClean:
+            #purge before we search, this limits the memory usage
+            self.regretTables = [{}, {}]
+            self.probTables = [{}, {}]
 
+        self.isClean = False
         print(end='', file=sys.stderr)
         for i in range(limit):
             print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
@@ -147,7 +168,11 @@ class CfrAgent:
         actions = moves.getMoves(self.format, req)
         #just sample a move
         probs = self.regretMatch(offPlayer, state, actions)
-        offAction = np.random.choice(actions, p=probs)
+        #apply exploration chance to off-player as well
+        exploreProbs = probs * (1 - self.exploration) + self.exploration / len(actions)
+        #or don't
+        #exploreProbs = probs
+        offAction = np.random.choice(actions, p=exploreProbs)
         #and update average stategy
         self.updateProbs(offPlayer, state, actions, probs / q, iter)
 
