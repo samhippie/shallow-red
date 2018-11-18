@@ -19,6 +19,7 @@ import montecarlo.exp3 as exp3
 import montecarlo.rm as rm
 import montecarlo.oos as oos
 import montecarlo.cfr as cfr
+import montecarlo.deepcfr as deepcfr
 
 #This file has functions relating to running the AI
 
@@ -348,7 +349,9 @@ async def playTestGame(teams, limit=100, time=None,
 
         game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
-        agent = getAgent(algo, teams, format, valueModel)
+        #agent = getAgent(algo, teams, format, valueModel)
+        agent = deepcfr.DeepCfrAgent(teams, format)
+
         if bootstrapAlgo:
             bootAgent = getAgent(bootstrapAlgo, teams, format)
 
@@ -419,8 +422,8 @@ async def playTestGame(teams, limit=100, time=None,
 
 
                     #let the agents combine and purge data
-                    print('combining', file=sys.stderr)
-                    agent.combine()
+                    #print('combining', file=sys.stderr)
+                    #agent.combine()
 
                 #player-specific
                 queues = [game.p1Queue, game.p2Queue]
@@ -439,7 +442,8 @@ async def playTestGame(teams, limit=100, time=None,
                     else:
                         #let the agent pick the action
                         #figure out what kind of action we need
-                        state = request[1]['stateHash']
+                        #state = request[1]['stateHash']
+                        state = request[1]['state']
                         actions = moves.getMoves(format, request[1])
 
                         probs = agent.getProbs(num, state, actions)

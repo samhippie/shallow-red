@@ -2,9 +2,17 @@
 
 import numpy as np
 
+#this file is a bit messy as both value models and deep cfr models
+#both use these methods
+
+stateSize = 3883
+
 #3883 is the state size
 #186 is the action size
-inputShape = (3883 + 2 * 186,)
+inputShape = (stateSize + 2 * 186,)
+
+#number of possible actions, which is used for our enumeration
+numActions = 2486
 
 #used to store the maps from id,type to enumeration
 idMap = {}
@@ -171,9 +179,121 @@ def actionToTensor(action):
     return actionTensor
 
 
-
 def toInput(state, action1, action2):
     return np.concatenate([stateToTensor(state), actionToTensor(action1), actionToTensor(action2)])
+
+
+#these are the nice parts of the action enumeration code
+
+#action -> number
+enumActionMap = None
+#number -> action
+denumActionMap = None
+
+def enumAction(action):
+    if not enumActionMap:
+        genActionMap()
+    #convert singles actions to a canonical form
+    if ',' not in action and 'team' not in action:
+        action += ',pass'
+    #if there's a move with no target, set the target to 1
+    fixedAction = []
+    for part in action.split(','):
+        part = part.strip()
+        if 'move' in part:
+            components = part.split(' ')
+            #add a default target
+            if len(components) == 2:
+                components.append('1')
+            part = ' '.join(components)
+        fixedAction.append(part)
+
+    action = ' ' + ','.join(fixedAction)
+    return enumActionMap[action]
+
+#do we ever even use denumAction()?
+
+#this returns actions in canonical doubles form, not singles
+#so if you're playing singles, cut off the ',pass' at the end
+#def denumAction(n):
+    #if not denumActionMap:
+        #genActionMap()
+    #return denumAction[n]
+
+def genActionMap():
+    global denumActionMap
+    global enumActionMap
+    denumActionMap = {}
+    enumActionMap = {}
+
+    #n is the number of unique actions
+    #i is the enumerated actions, which has a lot of duplicates
+    n = 0
+    #minimum number to reach all actions
+    for i in range(43200):
+        action = _denumAction(i)
+        if not action in enumActionMap:
+            denumActionMap[n] = action
+            enumActionMap[action] = n
+            n += 1
+
+#this is the ugly part
+
+#converts a number to a doubles action (e.g. 'pass,pass', 'move 1 2, switch 2')
+#this will assign all possible actions in some lower bound (<43200)
+#this function is only used for the inital action enumeration generation
+#so don't call this unless you're trying to make an enumeration
+def _denumAction(n):
+    actionType = n % 10
+    n = n // 10
+    #team
+    if actionType == 9:
+        #can pick 1-6 mons
+        numPicked = (n % 6) + 1
+        n = n // 6
+        team = ['0' for _ in range(6)]
+        for i in range(6, 0, -1):
+            spot = n % i
+            n = n // i
+            #find the index of the spotth 0
+            for j in range(6):
+                if team[j] == '0':
+                    spot -= 1
+                if spot < 0:
+                    team[j] = str(6 - i + 1)
+                    break
+        team = team[0:numPicked]
+        return ' team ' + ''.join(team)
+
+    actionType1 = actionType % 3
+    actionType2 = actionType // 3
+
+    actions = []
+    for at in [actionType1, actionType2]:
+        #move
+        if at == 0:
+            action = n % 16
+            n = n // 16
+            move = (action % 4) + 1
+            target = (action // 4) - 2
+            #0 isn't a valid target
+            if target >= 0:
+                target += 1
+            actions.append('move ' + str(move) + ' ' + str(target))
+        #switch
+        elif at == 1:
+            target = (n % 6) + 1
+            n = n // 6
+            actions.append('switch ' + str(target))
+        #pass
+        elif at == 2:
+            actions.append('pass')
+
+    return ' ' + ','.join(actions)
+
+
+
+
 
 #turns a number into a one-hot representation
 #0-indexed
@@ -193,3 +313,11 @@ def insertSublist(xs, pos, oneHot, size=None):
     if size == None:
         size = len(oneHot)
     np.put(xs, range(pos * size, (pos+1) * size), oneHot)
+
+if __name__ == '__main__':
+    actions = {}
+    for i in range(43200):
+        action = denumAction(i)
+        if action not in actions:
+            print(action)
+            actions[action] = True
