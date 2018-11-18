@@ -20,6 +20,7 @@ import montecarlo.rm as rm
 import montecarlo.oos as oos
 import montecarlo.cfr as cfr
 import runner
+import deepRunner
 
 
 
@@ -110,7 +111,8 @@ async def main():
     #teams = (ovoTeams[5], ovoTeams[5])
     #initMoves = ([' team 2'], [' team 2'])
 
-    await runner.playTestGame(teams, format=format, limit=100, numProcesses=1, initMoves=initMoves, algo='cfr')#, bootstrapAlgo='rm', bootstrapPercentage=100)
+    #await runner.playTestGame(teams, format=format, limit=100, numProcesses=1, initMoves=initMoves, algo='cfr')#, bootstrapAlgo='rm', bootstrapPercentage=100)
+    await deepRunner.playTestGame(teams, format=format, limit=100, numProcesses=1, initMoves=initMoves)
 
     return
 

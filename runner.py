@@ -349,8 +349,7 @@ async def playTestGame(teams, limit=100, time=None,
 
         game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
-        #agent = getAgent(algo, teams, format, valueModel)
-        agent = deepcfr.DeepCfrAgent(teams, format)
+        agent = getAgent(algo, teams, format, valueModel)
 
         if bootstrapAlgo:
             bootAgent = getAgent(bootstrapAlgo, teams, format)
@@ -370,8 +369,6 @@ async def playTestGame(teams, limit=100, time=None,
             #actions taken so far by in the actual game
             p1Actions = []
             p2Actions = []
-            #we reassign this later, so we have to declare it nonlocal
-            #nonlocal mcDataset
             while True:
                 i += 1
                 print('starting turn', i, file=sys.stderr)
@@ -422,8 +419,8 @@ async def playTestGame(teams, limit=100, time=None,
 
 
                     #let the agents combine and purge data
-                    #print('combining', file=sys.stderr)
-                    #agent.combine()
+                    print('combining', file=sys.stderr)
+                    agent.combine()
 
                 #player-specific
                 queues = [game.p1Queue, game.p2Queue]
@@ -442,8 +439,7 @@ async def playTestGame(teams, limit=100, time=None,
                     else:
                         #let the agent pick the action
                         #figure out what kind of action we need
-                        #state = request[1]['stateHash']
-                        state = request[1]['state']
+                        state = request[1]['stateHash']
                         actions = moves.getMoves(format, request[1])
 
                         probs = agent.getProbs(num, state, actions)
