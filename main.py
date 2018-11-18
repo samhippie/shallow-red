@@ -104,15 +104,15 @@ async def main():
     #initMoves = ([' team 21'], [' team 12'])
 
     #initMoves = ([' team 12'], [' team 12'])
-    initMoves = ([' team 1'], [' team 1'])
-    #initMoves = ([], [])
+    #initMoves = ([' team 1'], [' team 1'])
+    initMoves = ([], [])
 
     #teams = (ovoTeams[5], ovoTeams[5])
     #initMoves = ([' team 2'], [' team 2'])
 
-    await runner.playTestGame(teams, format=format, limit=100, numProcesses=3, initMoves=initMoves, algo='rm')
+    #await runner.playTestGame(teams, format=format, limit=100, numProcesses=3, initMoves=initMoves, algo='cfr')#, bootstrapAlgo='rm', bootstrapPercentage=100)
 
-    return
+    #return
 
 
     limit1 = 100

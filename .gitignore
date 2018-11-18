@@ -1,3 +1,4 @@
 *.pyo
 *.pyc
 *.txt
+cg-run.sh

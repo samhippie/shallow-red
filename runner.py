@@ -52,15 +52,15 @@ def getAgent(algo, teams, format, valueModel=None):
                 teams=teams,
                 format=format,
 
-                samplingType=cfr.AVERAGE,
+                samplingType=cfr.EXTERNAL,
                 exploration=0.1,
                 bonus=0,
                 threshold=1,
                 bound=3,
 
-                #posReg=True,
-                #probScaling=2,
-                #regScaling=1.5,
+                posReg=True,
+                probScaling=2,
+                regScaling=1.5,
 
                 depthLimit=3,
                 evaluation=cfr.ROLLOUT,

@@ -116,13 +116,13 @@ class RegretMatchAgent:
             self.rewardTable = {}
             self.countTable = {}
 
-
         #turn init actions into a useful history
         history = [(None, a1, a2) for a1, a2 in zip(*initActions)]
         #insert the seed in the first turn
         if len(history) > 0:
             _, a1, a2 = history[0]
             history[0] = (seed, a1, a2)
+
 
         print(end='', file=sys.stderr)
         for i in range(limit):

@@ -104,6 +104,12 @@ class CfrAgent:
             self.probTables = [{}, {}]
 
         self.isClean = False
+
+        #each iteration returns an expected value
+        #so we track this and return an average
+        p1ExpValueTotal = 0
+        p2ExpValueTotal = 0
+
         print(end='', file=sys.stderr)
         for i in range(limit):
             print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
@@ -112,12 +118,15 @@ class CfrAgent:
             await game.applyHistory(history)
             self.numActionsSeen = 0
             self.numActionsTaken = 0
-            await self.cfrRecur(ps, game, seed, history, 1, i)
-            #print('num actions seen:', self.numActionsSeen, file=sys.stderr)
-            #print('num actions taken:', self.numActionsTaken, file=sys.stderr)
-            #print('percentage:', 100 * self.numActionsTaken / max(1, self.numActionsSeen), file=sys.stderr)
-            #print(file=sys.stderr)
+            expValue = await self.cfrRecur(ps, game, seed, history, 1, i)
+            if i % 2 == 0:
+                p1ExpValueTotal += expValue
+            else:
+                p2ExpValueTotal += expValue
         print(file=sys.stderr)
+
+        print('p1 exp value', 2 * p1ExpValueTotal / limit, file=sys.stderr)
+        print('p2 exp value', 2 * p2ExpValueTotal / limit, file=sys.stderr)
 
     def combine(self):
         #we'll do our combining and purging before we search
