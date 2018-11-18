@@ -126,15 +126,18 @@ def getMovesImpl(format, req):
                     if ('disabled' in move and move['disabled']) or ('pp' in move and move['pp'] == 0):
                         continue
                     if format not in doublesFormats or 'target' not in move:
-                        targets = ['']
+                        targets = []
                     #elif move['target'] == 'allySide':
                         #targets = ['-1' if i == 1 else '-2']
                     elif move['target'] in ['all', 'self', 'allAdjacentFoes', 'allAdjacent', 'randomNormal', 'foeSide', 'allySide']:
                         targets = ['']
                     elif move['target'] in ['normal', 'any']:
                         targets = ['-1' if i == 1 else '-2', '1', '2']
-                    for target in targets:
-                        actions.append('move ' + str(j+1) + ' ' + target)
+                    if len(targets) > 0:
+                        for target in targets:
+                            actions.append('move ' + str(j+1) + ' ' + target)
+                    else:
+                        actions.append('move ' + str(j+1))
 
             #pick the possible switching targets
             #TODO check how this works with shadow tag etc
