@@ -112,7 +112,7 @@ async def main():
     #initMoves = ([' team 2'], [' team 2'])
 
     #await runner.playTestGame(teams, format=format, limit=100, numProcesses=1, initMoves=initMoves, algo='cfr')#, bootstrapAlgo='rm', bootstrapPercentage=100)
-    await deepRunner.playTestGame(teams, format=format, limit=100, numProcesses=1, initMoves=initMoves)
+    await deepRunner.playTestGame(teams, format=format, limit=30, epochs=300, initMoves=initMoves)
 
     return
 

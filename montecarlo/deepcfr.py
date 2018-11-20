@@ -12,6 +12,8 @@ from game import Game
 import modelInput
 import moves
 
+from deepModel import DeepCfrModel
+
 #Deep MCCFR
 
 #based on this paper
@@ -22,71 +24,36 @@ import moves
 #which I think is fine as we generally do all of our searching ahead of time
 #so we'll need new runner functions
 
-class DeepCfrModel:
-
-    #for advantages, the input is the state vector
-    #and the output is a vector of each move's advantage
-    #for strategies, the input is the state vector
-    #and the output is a vector of each move's probability
-
-    #so the inputs are exactly the same (modelInput.stateSize), and the outputs
-    #are almost the same (modelInput.numActions)
-    #strategy is softmaxed, advantage is not
-
-
-    def __init__(self):
-        self.dataSet = []
-        self.labelSet = []
-        self.iterSet = []
-
-        #TODO init our network so that we initially output 0 for everything
-
-    def addSample(self, data, label, iter):
-        self.dataSet.append(modelInput.stateToTensor(data))
-
-        #list of non-zero indices
-        labelIndices = []
-        #list of the non-zero label values
-        labelValues = []
-        for action, value in label:
-            labelIndices.append(modelInput.enumAction(action))
-            labelValues.append(value)
-
-        self.labelSet.append((labelIndices, labelValues))
-
-        self.iterSet.append(iter)
-
-    def predict(self, data):
-        #TODO
-        return [random.random() for i in range(modelInput.numActions)]
-
-    def train(self):
-        #TODO
-        pass
-
-
 class DeepCfrAgent:
     #each player gets one of each model
     #advModels calculates advantages
     #stratModels calculates average strategy
-    def __init__(self, teams, format, advModels=None, stratModels=None, verbose=False):
+    def __init__(self, teams, format,
+            advModels=None, stratModels=None,
+            advEpochs=1000,
+            stratEpochs=10000,
+            branchingLimit=None,
+            verbose=False):
+
         self. teams = teams
         self.format = format
 
         if advModels:
             self.advModels = advModels
         else:
-            self.advModels = [DeepCfrModel() for i in range(2)]
+            self.advModels = [DeepCfrModel(softmax=False) for i in range(2)]
 
         if stratModels:
             self.stratModels = stratModels
         else:
-            self.stratModels = [DeepCfrModel() for i in range(2)]
+            self.stratModels = [DeepCfrModel(softmax=True) for i in range(2)]
+
+        self.advEpochs = advEpochs
+        self.stratEpochs = stratEpochs
+
+        self.branchingLimit = branchingLimit
 
         self.verbose = verbose
-
-        self.regretTables = [{}, {}]
-        self.probTables = [{}, {}]
 
     async def search(self, ps, pid=0, limit=100, seed=None, initActions=[[], []]):
         #turn init actions into a useful history
@@ -102,8 +69,22 @@ class DeepCfrAgent:
             game = Game(ps, self.teams, format=self.format, seed=seed, verbose=self.verbose)
             await game.startGame()
             await game.applyHistory(history)
-            await self.cfrRecur(ps, game, seed, history, 1, i)
+            await self.cfrRecur(ps, game, seed, history, i)
+
+            self.advTrain()
+
+        self.stratTrain()
+
         print(file=sys.stderr)
+
+    def advTrain(self):
+        for model in self.advModels:
+            model.train(epochs=self.advEpochs)
+
+    def stratTrain(self):
+        print('training strategy', file=sys.stderr)
+        for model in self.stratModels:
+            model.train(epochs=self.stratEpochs)
 
     #note that state must be the object, not the hash
     def getProbs(self, player, state, actions):
@@ -125,7 +106,7 @@ class DeepCfrAgent:
     #history is a list of (seed, action, action) tuples
     #q is the sample probability
     #assumes the game has already had the history applied
-    async def cfrRecur(self, ps, game, startSeed, history, iter, depth=0):
+    async def cfrRecur(self, ps, game, startSeed, history, iter, depth=0, rollout=False):
         async def endGame():
             side = 'bot1' if iter % 2 == 0 else 'bot2'
             winner = await game.winner
@@ -156,6 +137,7 @@ class DeepCfrAgent:
         probs = self.regretMatch(offPlayer, state, actions)
         offAction = np.random.choice(actions, p=probs)
         #and update average stategy
+        #we should be okay adding this for rollouts
         self.updateProbs(offPlayer, state, actions, probs, iter // 2 + 1)
 
         #on player
@@ -164,16 +146,36 @@ class DeepCfrAgent:
             return await endGame()
         req = request[1]
 
-        #we're going to be trying all actions
         state = req['state']
         actions = moves.getMoves(self.format, req)
         probs = self.regretMatch(onPlayer, state, actions)
+        if rollout:
+            #we pick one action according to the current strategy
+            actions = [np.random.choice(actions, p=probs)]
+            actionIndices = [0]
+        elif self.branchingLimit:
+            #select a set of actions to pick
+            #chance to play randomly instead of picking the best actions
+            exploreProbs = probs * (0.9) + 0.1 / len(probs)
+            #there might be some duplicates but it shouldn't matter
+            actionIndices = np.random.choice(len(actions), self.branchingLimit, p=exploreProbs)
+        else:
+            #we're picking every action
+            actionIndices = list(range(len(actions)))
 
         #get expected reward for each action
         rewards = []
         gameUsed = False
 
-        for action in actions:
+        for i in range(len(actions)):
+            action = actions[i]
+
+            #use rollout for non-sampled actions
+            if not i in actionIndices:
+                curRollout = True
+            else:
+                curRollout = rollout
+
             #don't have to re-init game for the first action
             if gameUsed:
                 game = Game(ps, self.teams, format=self.format, seed=startSeed, verbose=self.verbose)
@@ -199,19 +201,25 @@ class DeepCfrAgent:
             await game.cmdQueue.put(onHeader + action)
             await game.cmdQueue.put(offHeader + offAction)
 
-            r = await self.cfrRecur(ps, game, startSeed, history + [historyEntry], iter, depth=depth+1)
+            r = await self.cfrRecur(ps, game, startSeed, history + [historyEntry], iter, depth=depth+1, rollout=curRollout)
             rewards.append(r)
 
-        #save sample of advantages
-        stateExpValue = 0
-        for p,r in zip(probs, rewards):
-            stateExpValue += p * r
-        advantages = [r - stateExpValue for r in rewards]
+        if not rollout:
+            #save sample of advantages
+            stateExpValue = 0
+            for p,r in zip(probs, rewards):
+                stateExpValue += p * r
+            advantages = [r - stateExpValue for r in rewards]
 
-        am = self.advModels[onPlayer]
-        am.addSample(state, zip(actions, advantages), iter // 2 + 1)
+            am = self.advModels[onPlayer]
+            am.addSample(state, zip(actions, advantages), iter // 2 + 1)
 
-        return stateExpValue
+
+            return stateExpValue
+        else:
+            #we can't calculate advantage, so we can't update anything
+            #we only have one reward, so just return it
+            return rewards[0]
 
     #generates probabilities for each action
     #based on modeled advantages
@@ -235,7 +243,7 @@ class DeepCfrAgent:
                     best = i
             probs = [0 for a in actions]
             probs[best] = 1
-            return probs
+            return np.array(probs)
 
     #adds sample of current strategy
     def updateProbs(self, player, state, actions, probs, iter):

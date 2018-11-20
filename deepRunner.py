@@ -25,9 +25,18 @@ PS_ARG = 'simulate-battle'
 
 async def playTestGame(teams, limit=100,
         format='1v1', seed=None, initMoves=([],[]),
-        numProcesses=1,
+        numProcesses=1, epochs=100,
         file=sys.stdout):
     try:
+
+        #TODO
+        #multiple processes should work well assuming pytorch is thread safe
+        #but we'd have to synchronize our training, which would require
+        #modifying our agent code
+        #
+        #training currently dominates our run time, so it's not quite
+        #worth adding concurrency
+        numProcesses = 1
 
         mainPs = await getPSProcess()
 
@@ -41,18 +50,30 @@ async def playTestGame(teams, limit=100,
                 random.random() * 0x10000,
             ]
 
-        game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
 
-        agent = deepcfr.DeepCfrAgent(teams, format, verbose=False)
+        #stratEpochs = 10 * advEpochs because it just feels right,
+        #and I don't feel like making main() pass in two epoch arguments
+        agent = deepcfr.DeepCfrAgent(teams, format, advEpochs=epochs, stratEpochs=10 * epochs, branchingLimit=2, verbose=False)
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03
 
-        await game.startGame()
+        #instead of searching per turn, do all searching ahead of time
+        searches = []
+        for j in range(numProcesses):
+            search = agent.search(
+                    ps=searchPs[j],
+                    pid=j,
+                    limit=limit,
+                    seed=seed,
+                    initActions=initMoves)
+            searches.append(search)
+
+        await asyncio.gather(*searches)
 
         #this needs to be a coroutine so we can cancel it when the game ends
         #which due to concurrency issues might not be until we get into the MCTS loop
-        async def play():
+        async def play(initMoves):
             i = 0
             #actions taken so far by in the actual game
             p1Actions = []
@@ -60,21 +81,6 @@ async def playTestGame(teams, limit=100,
             while True:
                 i += 1
                 print('starting turn', i, file=sys.stderr)
-
-                #don't search if we aren't going to use the results
-                if len(initMoves[0]) == 0 or len(initMoves[1]) == 0:
-
-                    searches = []
-                    for j in range(numProcesses):
-                        search = agent.search(
-                                ps=searchPs[j],
-                                pid=j,
-                                limit=limit,
-                                seed=seed,
-                                initActions=[p1Actions, p2Actions])
-                        searches.append(search)
-
-                    await asyncio.gather(*searches)
 
                 #player-specific
                 queues = [game.p1Queue, game.p2Queue]
@@ -120,10 +126,15 @@ async def playTestGame(teams, limit=100,
                 await playTurn(1)
 
 
-        gameTask = asyncio.ensure_future(play())
-        winner = await game.winner
-        gameTask.cancel()
-        print('winner:', winner, file=sys.stderr)
+        #we're not searching, so additional games are free
+        for i in range(10):
+            game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
+            await game.startGame()
+            gameTask = asyncio.ensure_future(play(copy.deepcopy(initMoves)))
+            winner = await game.winner
+            gameTask.cancel()
+            print('winner:', winner, file=sys.stderr)
+            print('|' + ('-' * 79), file=file)
 
     except:
         raise
