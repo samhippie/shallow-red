@@ -25,7 +25,7 @@ PS_ARG = 'simulate-battle'
 
 async def playTestGame(teams, limit=100,
         format='1v1', seed=None, initMoves=([],[]),
-        numProcesses=1, epochs=100,
+        numProcesses=1, advEpochs=100, stratEpochs=1000, branchingLimit=2, depthLimit=None,
         file=sys.stdout):
     try:
 
@@ -50,10 +50,7 @@ async def playTestGame(teams, limit=100,
                 random.random() * 0x10000,
             ]
 
-
-        #stratEpochs = 10 * advEpochs because it just feels right,
-        #and I don't feel like making main() pass in two epoch arguments
-        agent = deepcfr.DeepCfrAgent(teams, format, advEpochs=epochs, stratEpochs=10 * epochs, branchingLimit=2, verbose=False)
+        agent = deepcfr.DeepCfrAgent(teams, format, advEpochs=advEpochs, stratEpochs=stratEpochs, branchingLimit=branchingLimit, depthLimit=depthLimit, verbose=False)
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03

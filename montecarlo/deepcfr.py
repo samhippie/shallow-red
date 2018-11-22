@@ -28,11 +28,22 @@ class DeepCfrAgent:
     #each player gets one of each model
     #advModels calculates advantages
     #stratModels calculates average strategy
+
+    #branch limit is the maximum number of actions taken
+    #actions that aren't taken are probed (i.e. rolled out)
+
+    #depth limit is the maximum number of turns taken from the root
+    #after the limit it hit, all games are evaluated via rollout
+    #this agent is only applied at the root, so depth limit might
+    #significantly affect the quality of late-game strategies
+    #(although we could use RM to find new late-game strategies,
+    #but that's outside the scope of this agent)
     def __init__(self, teams, format,
             advModels=None, stratModels=None,
             advEpochs=1000,
             stratEpochs=10000,
             branchingLimit=None,
+            depthLimit=None,
             verbose=False):
 
         self. teams = teams
@@ -52,6 +63,7 @@ class DeepCfrAgent:
         self.stratEpochs = stratEpochs
 
         self.branchingLimit = branchingLimit
+        self.depthLimit = depthLimit
 
         self.verbose = verbose
 
@@ -120,6 +132,9 @@ class DeepCfrAgent:
                 return 1
             else:
                 return -1
+
+        if depth >= self.depthLimit:
+            rollout = True
 
         cmdHeaders = ['>p1', '>p2']
         queues = [game.p1Queue, game.p2Queue]
