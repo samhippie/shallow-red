@@ -77,9 +77,13 @@ class DeepCfrModel:
         return self.net(data).detach().numpy()
 
     def train(self, epochs=100):
+
         #can't train without any samples
         if len(self.dataSet) == 0:
             return
+
+        #this is where we would send the model to the GPU for training
+        #but my GPU is too old for that
 
         dataSet = np.array(self.dataSet)
         labelSet = np.array(self.labelSet)
