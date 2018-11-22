@@ -128,6 +128,12 @@ async def playTestGame(teams, limit=100,
 
         #we're not searching, so additional games are free
         for i in range(10):
+            seed = [
+                random.random() * 0x10000,
+                random.random() * 0x10000,
+                random.random() * 0x10000,
+                random.random() * 0x10000,
+            ]
             game = Game(mainPs, format=format, teams=teams, seed=seed, verbose=True, file=file)
             await game.startGame()
             gameTask = asyncio.ensure_future(play(copy.deepcopy(initMoves)))
