@@ -6,6 +6,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from torchvision import transforms
 
 import modelInput
 
@@ -21,9 +22,16 @@ class Net(nn.Module):
         self.fc2 = nn.Linear(width, width)
         self.fc3 = nn.Linear(width, modelInput.numActions)
 
+        #I don't know how this function works but whatever
+        #that's how we roll
+        self.normalizer = nn.LayerNorm((width,))
+
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
+        #normalize to 0 mean and unit variance
+        #like in the paper
+        x = self.normalizer(x)
         if self.softmax:
             x = F.softmax(self.fc3(x), dim=0)
         else:
@@ -98,5 +106,7 @@ class DeepCfrModel:
             if i > epochs-11:
                 print(loss, file=sys.stderr)
             loss.backward()
+            #clip gradient norm, which was done in the paper
+            nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
             self.optimizer.step()
 
