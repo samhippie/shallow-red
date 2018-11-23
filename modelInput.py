@@ -193,8 +193,11 @@ denumActionMap = None
 def enumAction(action):
     if not enumActionMap:
         genActionMap()
+    #pass,pass is more orthogonal
+    if action.strip == 'noop':
+        action = ' pass,pass'
     #convert singles actions to a canonical form
-    if ',' not in action and 'team' not in action:
+    elif ',' not in action and 'team' not in action:
         action += ',pass'
     #if there's a move with no target, set the target to 1
     fixedAction = []
@@ -315,9 +318,4 @@ def insertSublist(xs, pos, oneHot, size=None):
     np.put(xs, range(pos * size, (pos+1) * size), oneHot)
 
 if __name__ == '__main__':
-    actions = {}
-    for i in range(43200):
-        action = denumAction(i)
-        if action not in actions:
-            print(action)
-            actions[action] = True
+    print(enumAction('noop'))
