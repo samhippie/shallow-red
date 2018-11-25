@@ -83,18 +83,25 @@ class DeepCfrAgent:
             await game.applyHistory(history)
             await self.cfrRecur(ps, game, seed, history, i)
 
-            self.advTrain()
+            #only need to train about once per iteration
+            #and as long as pid 0 doesn't finish too early this will be fine
+            if pid == 0:
+                self.advTrain(i % 2)
 
-        self.stratTrain()
+        #hopefully pid 0 doesn't finish too early
+        #we could be smarter and make this the last pid to finish
+        if pid == 0:
+            self.stratTrain()
 
         print(file=sys.stderr)
 
-    def advTrain(self):
-        for model in self.advModels:
-            model.train(epochs=self.advEpochs)
+    def advTrain(self, player):
+        model = self.advModels[player]
+        model.train(epochs=self.advEpochs)
 
     def stratTrain(self):
         print('training strategy', file=sys.stderr)
+        #we train both strat models at once
         for model in self.stratModels:
             model.train(epochs=self.stratEpochs)
 
@@ -128,6 +135,7 @@ class DeepCfrAgent:
             while not game.p2Queue.empty():
                 await game.p2Queue.get()
             #the deep cfr paper uses [-1,1] rather than [0,1] for u
+            #but I like [0,1]
             if winner == side:
                 return 1
             else:
@@ -149,11 +157,14 @@ class DeepCfrAgent:
         state = req['state']
         actions = moves.getMoves(self.format, req)
         #just sample a move
-        probs = self.regretMatch(offPlayer, state, actions)
+        probs = self.regretMatch(offPlayer, state, actions, -1)
+        if depth == 0:
+            print('player ' + str(offPlayer) + ' probs', list(zip(actions, probs)), file=sys.stderr)
         offAction = np.random.choice(actions, p=probs)
         #and update average stategy
         #we should be okay adding this for rollouts
-        self.updateProbs(offPlayer, state, actions, probs, iter // 2 + 1)
+        #but I'm testing skipping rollouts
+        self.updateProbs(offPlayer, state, actions, probs, iter)
 
         #on player
         request = (await queues[onPlayer].get())
@@ -163,7 +174,9 @@ class DeepCfrAgent:
 
         state = req['state']
         actions = moves.getMoves(self.format, req)
-        probs = self.regretMatch(onPlayer, state, actions)
+        probs = self.regretMatch(onPlayer, state, actions, depth)
+        if depth == 0:
+            print('player ' + str(onPlayer) + ' probs', list(zip(actions, probs)), file=sys.stderr)
         if rollout:
             #we pick one action according to the current strategy
             actions = [np.random.choice(actions, p=probs)]
@@ -171,7 +184,7 @@ class DeepCfrAgent:
         elif self.branchingLimit:
             #select a set of actions to pick
             #chance to play randomly instead of picking the best actions
-            exploreProbs = probs * (0.9) + 0.1 / len(probs)
+            exploreProbs = probs# * (0.9) + 0.1 / len(probs)
             #there might be some duplicates but it shouldn't matter
             actionIndices = np.random.choice(len(actions), self.branchingLimit, p=exploreProbs)
         else:
@@ -229,6 +242,10 @@ class DeepCfrAgent:
             am = self.advModels[onPlayer]
             am.addSample(state, zip(actions, advantages), iter // 2 + 1)
 
+            if depth == 0:
+                print('player', str(onPlayer), file=sys.stderr)
+                print('stateExpValue', stateExpValue, 'from', list(zip(probs, rewards)), file=sys.stderr)
+                print('advantages', list(zip(actions, advantages)), file=sys.stderr)
 
             return stateExpValue
         else:
@@ -238,13 +255,15 @@ class DeepCfrAgent:
 
     #generates probabilities for each action
     #based on modeled advantages
-    def regretMatch(self, player, state, actions):
+    def regretMatch(self, player, state, actions, depth):
         am = self.advModels[player]
         advs = am.predict(state)
         actionNums = [modelInput.enumAction(a) for a in actions]
         probs = []
         for n in actionNums:
             probs.append(max(0, advs[n]))
+        if depth == 0:
+            print('predicted advantages', [(action, advs[n]) for action, n in zip(actions, actionNums)], file=sys.stderr)
         probs = np.array(probs)
         pSum = np.sum(probs)
         if pSum > 0:
