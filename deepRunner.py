@@ -28,16 +28,6 @@ async def playTestGame(teams, limit=100,
         numProcesses=1, advEpochs=100, stratEpochs=1000, branchingLimit=2, depthLimit=None,
         file=sys.stdout):
     try:
-
-        #TODO
-        #multiple processes should work well assuming pytorch is thread safe
-        #but we'd have to synchronize our training, which would require
-        #modifying our agent code
-        #
-        #training currently dominates our run time, so it's not quite
-        #worth adding concurrency
-        numProcesses = 1
-
         mainPs = await getPSProcess()
 
         searchPs = [await getPSProcess() for i in range(numProcesses)]
@@ -77,7 +67,6 @@ async def playTestGame(teams, limit=100,
             p2Actions = []
             while True:
                 i += 1
-                print('starting turn', i, file=sys.stderr)
 
                 #player-specific
                 queues = [game.p1Queue, game.p2Queue]

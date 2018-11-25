@@ -12,7 +12,7 @@ import modelInput
 
 #model of the network
 class Net(nn.Module):
-    def __init__(self, softmax=False, width=1000):
+    def __init__(self, softmax=False, width=200):
         super(Net, self).__init__()
 
         self.softmax = softmax
@@ -20,22 +20,28 @@ class Net(nn.Module):
         #simple feed forward
         self.fc1 = nn.Linear(modelInput.stateSize, width)
         self.fc2 = nn.Linear(width, width)
-        self.fc3 = nn.Linear(width, modelInput.numActions)
+        #self.fc3 = nn.Linear(width, width)
+        #self.fc4 = nn.Linear(width, width)
+        #self.fc5 = nn.Linear(width, width)
+        self.fc6 = nn.Linear(width, modelInput.numActions)
 
         #I don't know how this function works but whatever
         #that's how we roll
-        self.normalizer = nn.LayerNorm((width,))
+        #self.normalizer = nn.LayerNorm((width,))
 
     def forward(self, x):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
+        #x = F.relu(self.fc3(x))
+        #x = F.relu(self.fc4(x))
+        #x = F.relu(self.fc5(x))
         #normalize to 0 mean and unit variance
         #like in the paper
-        x = self.normalizer(x)
+        #x = self.normalizer(x)
         if self.softmax:
-            x = F.softmax(self.fc3(x), dim=0)
+            x = F.softmax(self.fc6(x), dim=0)
         else:
-            x = self.fc3(x)
+            x = self.fc6(x)
         return x
 
 class DeepCfrModel:
@@ -50,15 +56,17 @@ class DeepCfrModel:
     #strategy is softmaxed, advantage is not
 
 
-    def __init__(self, softmax, lr=0.0001):
+    def __init__(self, softmax, lr=0.001):
         self.dataSet = []
         self.labelSet = []
         self.iterSet = []
 
-        #TODO init our network so that we initially output 0 for everything
+        self.softmax = softmax
+        self.lr = lr
 
         self.net = Net(softmax=softmax)
         self.optimizer = optim.Adam(self.net.parameters(), lr=lr)
+        #self.optimizer = optim.SGD(self.net.parameters(), lr=lr, momentum=0.9)
 
     def addSample(self, data, label, iter):
         self.dataSet.append(modelInput.stateToTensor(data))
@@ -78,34 +86,45 @@ class DeepCfrModel:
 
     def train(self, epochs=100):
 
+        #this is where we would send the model to the GPU for training
+        #but my GPU is too old for that
+
+        #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cpu')
+
+        self.net = Net(softmax=self.softmax)
+        self.net.to(device)
+        self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
+        miniBatchSize = 100
+
         #can't train without any samples
         if len(self.dataSet) == 0:
             return
-
-        #this is where we would send the model to the GPU for training
-        #but my GPU is too old for that
+        print('dataset size:', len(self.dataSet), file=sys.stderr)
 
         dataSet = np.array(self.dataSet)
         labelSet = np.array(self.labelSet)
         iterSet = np.array(self.iterSet)
         for i in range(epochs):
-            sampleIndices = np.random.choice(len(dataSet), 32)
+            sampleIndices = np.random.choice(len(dataSet), miniBatchSize)
 
             sampleData = dataSet[sampleIndices]
             data = torch.from_numpy(sampleData).float()
+            data.to(device)
 
             sampleLabels = labelSet[sampleIndices]
             labels = torch.from_numpy(sampleLabels).float()
+            labels.to(device)
 
             sampleIters = iterSet[sampleIndices]
             iters = torch.from_numpy(sampleIters).float()
+            iters.to(device)
 
             self.optimizer.zero_grad()
             ys = self.net(data)
 
             #loss function from the paper
-            loss = torch.sum(iters.view(32,1) * ((labels - ys) ** 2))
-            #loss = torch.sum(iters * ((labels - ys) ** 2).t())
+            loss = torch.sum(iters.view(miniBatchSize,1) * ((labels - ys) ** 2))
             #print the last 10 losses
             if i > epochs-11:
                 print(loss, file=sys.stderr)
