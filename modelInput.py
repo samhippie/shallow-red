@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import numpy as np
+import pickle
 
 #this file is a bit messy as both value models and deep cfr models
 #both use these methods
@@ -295,8 +296,16 @@ def _denumAction(n):
     return ' ' + ','.join(actions)
 
 
+#dumping/reading the id map to/from a file
+def saveIdMap(filename):
+    idMapData = pickle.dumps(idMap)
+    with open(filename, 'wb') as mapFile:
+        mapFile.write(idMapData)
 
-
+def readIdMap(filename):
+    with open(filename, 'rb') as mapFile:
+        idMapData = mapFile.read()
+        modelInput.idMap = pickle.loads(idMapData)
 
 #turns a number into a one-hot representation
 #0-indexed

@@ -20,7 +20,7 @@ dbConnect = "dbname='shallow-red' user='shallow-red' host='localhost' password='
 
 #model of the network
 class Net(nn.Module):
-    def __init__(self, softmax=False, width=1000):
+    def __init__(self, softmax=False, width=300):
         super(Net, self).__init__()
 
         self.softmax = softmax
@@ -32,8 +32,8 @@ class Net(nn.Module):
         self.fc1 = nn.Linear(modelInput.stateSize, width)
         self.fc2 = nn.Linear(width, width)
         self.fc3 = nn.Linear(width, width)
-        self.fc4 = nn.Linear(width, width)
-        self.fc5 = nn.Linear(width, width)
+        #self.fc4 = nn.Linear(width, width)
+        #self.fc5 = nn.Linear(width, width)
         self.fc6 = nn.Linear(width, modelInput.numActions)
 
         #I don't know how this function works but whatever
@@ -44,8 +44,8 @@ class Net(nn.Module):
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x))
-        x = F.relu(self.fc4(x))
-        x = F.relu(self.fc5(x))
+        #x = F.relu(self.fc4(x))
+        #x = F.relu(self.fc5(x))
         #normalize to 0 mean and unit variance
         #like in the paper
         #x = self.normalizer(x)
@@ -156,6 +156,9 @@ class DeepCfrModel:
         return self.net(data).detach().numpy()
 
     def train(self, epochs=100):
+        #TODO make this configurable
+        #I'm doing this so we can manually resume a stopped run
+        modelInput.saveIdMap('idmap.pickle')
 
         #move from write cache to db
         self.clearSampleCache()
