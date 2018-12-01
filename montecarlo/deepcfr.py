@@ -52,12 +52,12 @@ class DeepCfrAgent:
         if advModels:
             self.advModels = advModels
         else:
-            self.advModels = [DeepCfrModel(softmax=False) for i in range(2)]
+            self.advModels = [DeepCfrModel(name='adv' + str(i), softmax=False) for i in range(2)]
 
         if stratModels:
             self.stratModels = stratModels
         else:
-            self.stratModels = [DeepCfrModel(softmax=True) for i in range(2)]
+            self.stratModels = [DeepCfrModel(name='strat' + str(i), softmax=True) for i in range(2)]
 
         self.advEpochs = advEpochs
         self.stratEpochs = stratEpochs
@@ -90,8 +90,8 @@ class DeepCfrAgent:
 
         #hopefully pid 0 doesn't finish too early
         #we could be smarter and make this the last pid to finish
-        if pid == 0:
-            self.stratTrain()
+        #if pid == 0:
+        #self.stratTrain()
 
         print(file=sys.stderr)
 
@@ -120,6 +120,11 @@ class DeepCfrAgent:
             return probs / np.sum(probs)
         else:
             return np.array([1 / len(actions) for a in actions])
+
+    #closes the models, which have data to clean up
+    def close(self):
+        for model in self.advModels + self.stratModels:
+            model.close()
 
     #recursive implementation of cfr
     #history is a list of (seed, action, action) tuples

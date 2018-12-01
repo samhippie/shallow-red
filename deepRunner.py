@@ -58,6 +58,10 @@ async def playTestGame(teams, limit=100,
 
         await asyncio.gather(*searches)
 
+        #we could have the agent do this when it's done training,
+        #but I don't like having the agent worry about its own synchronization
+        agent.stratTrain()
+
         #this needs to be a coroutine so we can cancel it when the game ends
         #which due to concurrency issues might not be until we get into the MCTS loop
         async def play(initMoves):
