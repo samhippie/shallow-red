@@ -38,26 +38,37 @@ class DeepCfrAgent:
     #significantly affect the quality of late-game strategies
     #(although we could use RM to find new late-game strategies,
     #but that's outside the scope of this agent)
+
+    #resumeIter is the iteration to resume from
+    #this really should be a paremeter to the search function,
+    #but we need to know about it when we initialize the models
+    #this is a problem with our agent being made for a one-shot training cycle
+    #instead of multiple training cycles like the others
     def __init__(self, teams, format,
             advModels=None, stratModels=None,
             advEpochs=1000,
             stratEpochs=10000,
             branchingLimit=None,
             depthLimit=None,
+            resumeIter=None,
             verbose=False):
 
         self. teams = teams
         self.format = format
 
+        self.resumeIter = resumeIter
+        #if we are resuming, then we don't want to clear the db
+        clearDb = resumeIter == None
+
         if advModels:
             self.advModels = advModels
         else:
-            self.advModels = [DeepCfrModel(name='adv' + str(i), softmax=False) for i in range(2)]
+            self.advModels = [DeepCfrModel(name='adv' + str(i), softmax=False, clearDb=clearDb) for i in range(2)]
 
         if stratModels:
             self.stratModels = stratModels
         else:
-            self.stratModels = [DeepCfrModel(name='strat' + str(i), softmax=True) for i in range(2)]
+            self.stratModels = [DeepCfrModel(name='strat' + str(i), softmax=True, clearDb=clearDb) for i in range(2)]
 
         self.advEpochs = advEpochs
         self.stratEpochs = stratEpochs
@@ -75,8 +86,10 @@ class DeepCfrAgent:
             _, a1, a2 = history[0]
             history[0] = (seed, a1, a2)
 
+        start = self.resumeIter if self.resumeIter else 0
+
         print(end='', file=sys.stderr)
-        for i in range(limit):
+        for i in range(start, limit):
             print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
             game = Game(ps, self.teams, format=self.format, seed=seed, verbose=self.verbose)
             await game.startGame()

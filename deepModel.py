@@ -19,6 +19,7 @@ dbConnect = "dbname='shallow-red' user='shallow-red' host='localhost' password='
 
 
 #model of the network
+#the topology of this really should be configurable
 class Net(nn.Module):
     def __init__(self, softmax=False, width=300):
         super(Net, self).__init__()
@@ -66,11 +67,14 @@ class DeepCfrModel:
     #are almost the same (modelInput.numActions)
     #strategy is softmaxed, advantage is not
 
-
-
     def __init__(self, name, softmax, lr=0.001, sampleCacheSize=10000, clearDb=True):
         self.softmax = softmax
         self.lr = lr
+
+        #if we're not clearing the db, then we should also load in the id map
+        #so that the inputs to the model will match those in the db
+        if not clearDb:
+            modelInput.readIdMap('idmap.pickle')
 
         self.net = Net(softmax=softmax)
         self.optimizer = optim.Adam(self.net.parameters(), lr=lr)
@@ -108,15 +112,21 @@ class DeepCfrModel:
         ARRAY = psycopg2.extensions.new_type(psycopg2.BINARY.values, 'ARRAY', binary_to_numpy)
         psycopg2.extensions.register_type(ARRAY)
 
+        #we're going to be inserting this directly into the query strings
+        #because psql doesn't like table names from parameters
+        self.tableName = 'samples_' + name
+
         #self.trainingDb = sqlite3.connect(name + '.db', detect_types=sqlite3.PARSE_DECLTYPES)
         self.trainingDb = psycopg2.connect(dbConnect)
-        self.cur = self.trainingDb.cursor()
+        cur = self.trainingDb.cursor()
         if clearDb:
-            self.cur.execute('DROP TABLE IF EXISTS samples;')
-            self.cur.execute('DROP SEQUENCE IF EXISTS sample_seq;')
-        self.cur.execute('CREATE TABLE IF NOT EXISTS samples (id SERIAL PRIMARY KEY, data BYTEA);')
-        self.cur.execute('CREATE SEQUENCE IF NOT EXISTS sample_seq')
-        self.cur.execute('ALTER SEQUENCE sample_seq OWNED BY samples.id')
+            cur.execute('DROP TABLE IF EXISTS ' + self.tableName)
+            cur.execute('DROP SEQUENCE IF EXISTS ' + self.tableName + '_seq')
+        #cur.execute('CREATE TABLE IF NOT EXISTS samples (id SERIAL PRIMARY KEY, data BYTEA);')
+        cur.execute('CREATE TABLE IF NOT EXISTS ' + self.tableName + ' (id SERIAL PRIMARY KEY, data BYTEA);')
+        cur.execute('CREATE SEQUENCE IF NOT EXISTS ' + self.tableName + '_seq')
+        cur.execute('ALTER SEQUENCE ' + self.tableName + '_seq OWNED BY ' + self.tableName + '.id')
+        cur.close()
         self.trainingDb.commit()
 
     def addSample(self, data, label, iter):
@@ -136,9 +146,11 @@ class DeepCfrModel:
     def clearSampleCache(self):
         if len(self.sampleCache) == 0:
             return
-        self.cur.executemany(
-                'INSERT INTO samples VALUES (nextval(\'sample_seq\'), %s)', self.sampleCache)
+        cur = self.trainingDb.cursor()
+        cur.executemany(
+                'INSERT INTO ' + self.tableName + ' VALUES (nextval(\'sample_seq\'), %s)', self.sampleCache)
                 #'INSERT INTO samples VALUES (NULL, ?)', [(numpy_to_bytea(s[0]),) for s in self.sampleCache])
+        cur.close()
         self.trainingDb.commit()
         self.sampleCache = []
 
@@ -147,7 +159,6 @@ class DeepCfrModel:
         #make sure we save everything first
         #so we can use the same training data in the future
         self.clearSampleCache()
-        self.cur.close()
         self.trainingDb.close()
 
     def predict(self, state):
@@ -169,20 +180,28 @@ class DeepCfrModel:
         #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         #device = torch.device('cpu')
 
+        print('initing net')
         self.net = Net(softmax=self.softmax)
         #self.net.to(device)
         #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
         self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
         miniBatchSize = 1000
 
+        print('getting data size')
         #can't train without any samples
         dataSetSize = self.getTrainingDbSize()
         if dataSetSize == 0:
             return
         print('dataset size:', dataSetSize, file=sys.stderr)
 
+        print('getting all samples')
+        sampleSet = self.getRandomSamples(miniBatchSize, dataSetSize, epochs)
+
         for i in range(epochs):
-            samples = self.getRandomSamples(miniBatchSize)
+            #print('getting samples')
+            #samples = self.getRandomSamples(miniBatchSize, dataSetSize)
+            samples = sampleSet[i]
+            print('slicing/converting samples')
             #each row in samples is a sample, so we're getting the columns
             sampleData = samples[:, 0:modelInput.stateSize]
             sampleLabels = samples[:, modelInput.stateSize:modelInput.stateSize + modelInput.numActions]
@@ -198,30 +217,50 @@ class DeepCfrModel:
             iters = torch.from_numpy(sampleIters).float()
             #iters.to(device)
 
+            print('evaluating samples')
+
             #evaluate on network
             self.optimizer.zero_grad()
             ys = self.net(data)
+
+            print('getting loss')
 
             #loss function from the paper
             loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))
             #print the last 10 losses
             if i > epochs-11:
                 print(loss, file=sys.stderr)
+            print('backprop')
             #get gradient of loss
             loss.backward()
+            print('clipping gradient')
             #clip gradient norm, which was done in the paper
             nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
+            print('optimizing net')
             #train the network
             self.optimizer.step()
+            print('done with epoch', i)
 
     def getTrainingDbSize(self):
-        self.cur.execute('SELECT COUNT(*) FROM samples')
-        size = self.cur.fetchone()[0]
+        cur = self.trainingDb.cursor()
+        cur.execute('SELECT COUNT(*) FROM ' + self.tableName)
+        size = cur.fetchone()[0]
+        cur.close()
         return size
 
-    def getRandomSamples(self, num):
-        self.cur.execute('SELECT data FROM samples ORDER BY RANDOM() LIMIT %s', (num,))
+    def getRandomSamples(self, batchSize, totalSize, numBatches):
+        cur = self.trainingDb.cursor()
+        #this is supposed to be fast
+        percent = min(100 * batchSize / totalSize, 100)
+        print('getting percentage', percent)
+        #our samples shouldn't be that big, so the extra randomness from bernoulli should be worth the speed tradeoff
+        #cur.execute('SELECT data FROM ' + self.tableName + ' TABLESAMPLE SYSTEM (%s)', (percent,))
+        cur.executemany('SELECT data FROM ' + self.tableName + ' TABLESAMPLE SYSTEM (%s)', ((percent,),) * numBatches)
+        #naive way, but works
+        #cur.execute('SELECT data FROM ' + self.tableName + ' ORDER BY RANDOM() LIMIT %s', (num,))
+        #don't remember what these are from, probably don't work
         #samples = self.cur.execute('SELECT data FROM samples ORDER BY RANDOM() LIMIT %s', (num,))
         #samples = [bytea_to_numpy(s[0]) for s in cur.fetchall()]
-        samples = [s[0] for s in self.cur.fetchall()]
+        samples = [s[0][0] for s in cur.fetchall()]
+        cur.close()
         return np.array(samples)

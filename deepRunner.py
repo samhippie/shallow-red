@@ -25,7 +25,7 @@ PS_ARG = 'simulate-battle'
 
 async def playTestGame(teams, limit=100,
         format='1v1', seed=None, initMoves=([],[]),
-        numProcesses=1, advEpochs=100, stratEpochs=1000, branchingLimit=2, depthLimit=None,
+        numProcesses=1, advEpochs=100, stratEpochs=1000, branchingLimit=2, depthLimit=None, resumeIter=None,
         file=sys.stdout):
     try:
         mainPs = await getPSProcess()
@@ -40,7 +40,7 @@ async def playTestGame(teams, limit=100,
                 random.random() * 0x10000,
             ]
 
-        agent = deepcfr.DeepCfrAgent(teams, format, advEpochs=advEpochs, stratEpochs=stratEpochs, branchingLimit=branchingLimit, depthLimit=depthLimit, verbose=False)
+        agent = deepcfr.DeepCfrAgent(teams, format, advEpochs=advEpochs, stratEpochs=stratEpochs, branchingLimit=branchingLimit, depthLimit=depthLimit, resumeIter=resumeIter, verbose=False)
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03

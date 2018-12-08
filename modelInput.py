@@ -303,9 +303,10 @@ def saveIdMap(filename):
         mapFile.write(idMapData)
 
 def readIdMap(filename):
+    global idMap
     with open(filename, 'rb') as mapFile:
         idMapData = mapFile.read()
-        modelInput.idMap = pickle.loads(idMapData)
+        idMap = pickle.loads(idMapData)
 
 #turns a number into a one-hot representation
 #0-indexed
