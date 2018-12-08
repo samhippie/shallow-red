@@ -12,7 +12,7 @@ from game import Game
 import modelInput
 import moves
 
-from deepModel import DeepCfrModel
+from deep.deepModel import DeepCfrModel
 
 #Deep MCCFR
 

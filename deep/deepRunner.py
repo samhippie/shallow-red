@@ -13,7 +13,7 @@ import subprocess
 
 import moves
 from game import Game
-import montecarlo.deepcfr as deepcfr
+import deep.deepcfr as deepcfr
 
 #This file has functions relating to running the AI
 #with the deep cfr configuration

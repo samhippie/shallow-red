@@ -20,7 +20,7 @@ import montecarlo.rm as rm
 import montecarlo.oos as oos
 import montecarlo.cfr as cfr
 import runner
-import deepRunner
+import deep.deepRunner as deepRunner
 
 
 

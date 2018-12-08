@@ -19,7 +19,6 @@ import montecarlo.exp3 as exp3
 import montecarlo.rm as rm
 import montecarlo.oos as oos
 import montecarlo.cfr as cfr
-import montecarlo.deepcfr as deepcfr
 
 #This file has functions relating to running the AI
 
