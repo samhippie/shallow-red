@@ -22,7 +22,7 @@ dbConnect = "dbname='shallow-red' user='shallow-red' host='localhost' password='
 #model of the network
 #the topology of this really should be configurable
 class Net(nn.Module):
-    def __init__(self, softmax=False, width=300):
+    def __init__(self, softmax=False, width=1000):
         super(Net, self).__init__()
 
         self.softmax = softmax
@@ -68,7 +68,7 @@ class DeepCfrModel:
     #are almost the same (modelInput.numActions)
     #strategy is softmaxed, advantage is not
 
-    def __init__(self, name, softmax, writeLock, lr=0.001, sampleCacheSize=10000, clearDb=True):
+    def __init__(self, name, softmax, writeLock, lr=0.001, sampleCacheSize=1000, clearDb=True):
         self.softmax = softmax
         self.lr = lr
         self.writeLock = writeLock
@@ -98,9 +98,6 @@ class DeepCfrModel:
             labelTensor[n] = value
 
         #put the np array in a tuple because that's what sqlite expects
-        print(stateTensor.shape)
-        print(labelTensor.shape)
-        print(iter)
         self.sampleCache.append(np.concatenate((stateTensor, labelTensor, [iter])))
         if len(self.sampleCache) > self.sampleCacheSize:
             self.clearSampleCache()
@@ -128,15 +125,14 @@ class DeepCfrModel:
         modelInput.saveIdMap('idmap.pickle')
 
         #move from write cache to db
-        print('clearing cache')
         self.clearSampleCache()
 
         #this is where we would send the model to the GPU for training
         #but my GPU is too old for that
 
-        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        #device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        device = torch.device('cpu')
 
-        print('initing net')
         self.net = Net(softmax=self.softmax)
         self.net.to(device)
         #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
@@ -145,70 +141,23 @@ class DeepCfrModel:
 
         dataset = deep.dataStorage.Dataset(self.name)
         loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=True, num_workers=4)
-        print('loader', loader)
-
-        for data, label, iter in loader:
-            #TODO finish this
-            #shapes: [45, 3883], [45, 2486], [45, 1]
-            print(data.shape, label.shape, iter.shape)
-
-        self.net.to(torch.device('cpu'))
-
-"""
-
-
-        print('getting data size')
-        #can't train without any samples
-        dataSetSize = self.getTrainingDbSize()
-        if dataSetSize == 0:
-            return
-        print('dataset size:', dataSetSize, file=sys.stderr)
-
-        print('getting all samples')
-        sampleSet = self.getRandomSamples(miniBatchSize, dataSetSize, epochs)
 
         for i in range(epochs):
-            #print('getting samples')
-            #samples = self.getRandomSamples(miniBatchSize, dataSetSize)
-            samples = sampleSet[i]
-            print('slicing/converting samples')
-            #each row in samples is a sample, so we're getting the columns
-            sampleData = samples[:, 0:modelInput.stateSize]
-            sampleLabels = samples[:, modelInput.stateSize:modelInput.stateSize + modelInput.numActions]
-            sampleIters = samples[:, -1]
+            for data, labels, iters in loader:
+                #evaluate on network
+                self.optimizer.zero_grad()
+                ys = self.net(data)
 
-            #convert each to a torch tensor
-            data = torch.from_numpy(sampleData).float()
-            #data.to(device)
+                #loss function from the paper
+                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))
+                #print the last 10 losses
+                if i > epochs-11:
+                    print(loss, file=sys.stderr)
+                #get gradient of loss
+                loss.backward()
+                #clip gradient norm, which was done in the paper
+                nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
+                #train the network
+                self.optimizer.step()
 
-            labels = torch.from_numpy(sampleLabels).float()
-            #labels.to(device)
-
-            iters = torch.from_numpy(sampleIters).float()
-            #iters.to(device)
-
-            print('evaluating samples')
-
-            #evaluate on network
-            self.optimizer.zero_grad()
-            ys = self.net(data)
-
-            print('getting loss')
-
-            #loss function from the paper
-            loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))
-            #print the last 10 losses
-            if i > epochs-11:
-                print(loss, file=sys.stderr)
-            print('backprop')
-            #get gradient of loss
-            loss.backward()
-            print('clipping gradient')
-            #clip gradient norm, which was done in the paper
-            nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
-            print('optimizing net')
-            #train the network
-            self.optimizer.step()
-            print('done with epoch', i)
-
-"""
+        self.net.to(torch.device('cpu'))

@@ -29,20 +29,21 @@ def addSamples(lock, id, samples):
         os.mkdir(DATA_DIR)
     if os.path.exists(DATA_DIR + 'index'):
         with open(DATA_DIR + 'index', 'r') as file:
-            lines = file.readlines()
+            lines = list(file.readlines())
             for i in range(len(lines)):
                 line = lines[i]
-                if line.startswith(id):
+                if line.split(',')[0] == id:
                     count = int(line.split(',')[1][:-1])
-                    lines[i] = id + ',' + str(count + len(samples))
+                    lines[i] = id + ',' + str(count + len(samples)) + '\n'
+                    break
 
     #brand new sample set
     if count == 0:
-        lines.append(id + ',' + str(len(samples)))
+        lines.append(id + ',' + str(len(samples)) + '\n')
     #update the indices after we're written our files
-    with open(DATA_DIR + 'index', 'w+') as file:
+    with open(DATA_DIR + 'index', 'w') as file:
         for line in lines:
-            print(line, file=file)
+            print(line, file=file, end='')
 
     lock.release()
 
@@ -59,7 +60,7 @@ class Dataset(torch.utils.data.Dataset):
         self.id = id
         with open(DATA_DIR + 'index', 'r') as file:
             for line in file.readlines():
-                if line.startswith(id):
+                if line.split(',')[0] == id:
                     self.size = int(line.split(',')[1][:-1])
 
     def __getitem__(self, idx):

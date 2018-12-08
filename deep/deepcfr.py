@@ -62,6 +62,8 @@ class DeepCfrAgent:
         self. teams = teams
         self.format = format
 
+        self.pid = -1
+
         self.resumeIter = resumeIter
 
         self.writeLock = writeLock
@@ -90,6 +92,7 @@ class DeepCfrAgent:
         self.verbose = verbose
 
     async def search(self, ps, pid=0, limit=100, seed=None, initActions=[[], []]):
+        self.pid = pid
         #turn init actions into a useful history
         history = [(None, a1, a2) for a1, a2 in zip(*initActions)]
         #insert the seed in the first turn
@@ -114,23 +117,24 @@ class DeepCfrAgent:
             await game.applyHistory(history)
             await self.cfrRecur(ps, game, seed, history, i)
 
+            #save our adv data after each iteration
+            #so the non-zero pid workers don't have data cached
+            self.advModels[i % 2].clearSampleCache()
+
             #only need to train about once per iteration
             #and as long as pid 0 doesn't finish too early this will be fine
-            print('hit barrier')
             self.trainingBarrier.wait()
-            print('past barrier')
             if pid == 0:
                 self.advTrain(i % 2)
                 self.sharedDict['advNet' + str(i % 2)] = self.advModels[i % 2].net
-                #TODO broadcast the trained network
-
             self.trainingBarrier.wait()
             self.advModels[i % 2].net = self.sharedDict['advNet' + str(i % 2)]
 
-        #hopefully pid 0 doesn't finish too early
-        #we could be smarter and make this the last pid to finish
-        #if pid == 0:
-        #self.stratTrain()
+        #clear the sample caches so the master agent can train with our data
+        for sm in self.stratModels:
+            sm.clearSampleCache()
+
+        self.trainingBarrier.wait()
 
         print(file=sys.stderr)
 
@@ -325,6 +329,5 @@ class DeepCfrAgent:
 
     #adds sample of current strategy
     def updateProbs(self, player, state, actions, probs, iter):
-        print('updating probs for', player)
         sm = self.stratModels[player]
         sm.addSample(state, zip(actions, probs), iter)

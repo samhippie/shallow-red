@@ -4,3 +4,4 @@
 cg-run.sh
 *.db
 *.pickle
+data/*

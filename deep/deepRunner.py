@@ -47,21 +47,21 @@ async def playTestGame(teams, limit=100,
         trainingBarrier = m.Barrier(numProcesses)
         sharedDict = m.dict()
 
-        agents = []
-        for j in range(numProcesses):
-            agent = deepcfr.DeepCfrAgent(
-                    teams,
-                    format,
-                    advEpochs=advEpochs,
-                    stratEpochs=stratEpochs,
-                    branchingLimit=branchingLimit,
-                    depthLimit=depthLimit,
-                    resumeIter=resumeIter,
-                    writeLock=writeLock,
-                    trainingBarrier=trainingBarrier,
-                    sharedDict=sharedDict,
-                    verbose=False)
-            agents.append(agent)
+        #agents = []
+        #for j in range(numProcesses):
+        agent = deepcfr.DeepCfrAgent(
+                teams,
+                format,
+                advEpochs=advEpochs,
+                stratEpochs=stratEpochs,
+                branchingLimit=branchingLimit,
+                depthLimit=depthLimit,
+                resumeIter=resumeIter,
+                writeLock=writeLock,
+                trainingBarrier=trainingBarrier,
+                sharedDict=sharedDict,
+                verbose=False)
+            #agents.append(agent)
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03
@@ -69,13 +69,12 @@ async def playTestGame(teams, limit=100,
         #instead of searching per turn, do all searching ahead of time
         processes = []
         for j in range(numProcesses):
-            print(j)
             def run():
                 print('running', j)
                 async def asyncRun():
                     ps = await getPSProcess()
                     try:
-                        await agents[j].search(
+                        await agent.search(
                             ps=ps,
                             pid=j,
                             limit=limit,
@@ -100,11 +99,12 @@ async def playTestGame(teams, limit=100,
         #await asyncio.gather(*searches)
 
         #everything from here on only needs a single agent
-        agent = agents[0]
+        #agent = agents[0]
 
         #we could have the agent do this when it's done training,
         #but I don't like having the agent worry about its own synchronization
         agent.stratTrain()
+        print('agent pid', agent.pid)
 
         mainPs = await getPSProcess()
 
