@@ -197,18 +197,3 @@ class Game:
             await self.p2Queue.get()
             await self.cmdQueue.put('>p2' + a2)
 
-
-"""
-    def getRequestType(self, message):
-        if message.startswith('{"teamPreview"'):
-            return Game.REQUEST_TEAM
-        elif message.startswith('{"forceSwitch"'):
-            return Game.REQUEST_SWITCH
-        elif message.startswith('{"wait"'):
-            return Game.REQUEST_WAIT
-        else:
-            return Game.REQUEST_TURN
-        pass
-
-"""
-

@@ -44,7 +44,13 @@ class DeepCfrAgent:
     #but we need to know about it when we initialize the models
     #this is a problem with our agent being made for a one-shot training cycle
     #instead of multiple training cycles like the others
-    def __init__(self, teams, format,
+    def __init__(
+            self,
+            teams,
+            format,
+            writeLock,
+            trainingBarrier,
+            sharedDict,
             advModels=None, stratModels=None,
             advEpochs=1000,
             stratEpochs=10000,
@@ -57,18 +63,23 @@ class DeepCfrAgent:
         self.format = format
 
         self.resumeIter = resumeIter
+
+        self.writeLock = writeLock
+        self.trainingBarrier = trainingBarrier
+        self.sharedDict = sharedDict
+
         #if we are resuming, then we don't want to clear the db
         clearDb = resumeIter == None
 
         if advModels:
             self.advModels = advModels
         else:
-            self.advModels = [DeepCfrModel(name='adv' + str(i), softmax=False, clearDb=clearDb) for i in range(2)]
+            self.advModels = [DeepCfrModel(name='adv' + str(i), softmax=False, clearDb=clearDb, writeLock=writeLock) for i in range(2)]
 
         if stratModels:
             self.stratModels = stratModels
         else:
-            self.stratModels = [DeepCfrModel(name='strat' + str(i), softmax=True, clearDb=clearDb) for i in range(2)]
+            self.stratModels = [DeepCfrModel(name='strat' + str(i), softmax=True, clearDb=clearDb, writeLock=writeLock) for i in range(2)]
 
         self.advEpochs = advEpochs
         self.stratEpochs = stratEpochs
@@ -91,6 +102,13 @@ class DeepCfrAgent:
         print(end='', file=sys.stderr)
         for i in range(start, limit):
             print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
+
+            #need idMap to be the same across processes
+            if pid == 0:
+                self.sharedDict['idMap'] = modelInput.idMap
+            elif 'idMap' in self.sharedDict:
+                modelInput.idMap = self.sharedDict['idMap']
+
             game = Game(ps, self.teams, format=self.format, seed=seed, verbose=self.verbose)
             await game.startGame()
             await game.applyHistory(history)
@@ -98,8 +116,16 @@ class DeepCfrAgent:
 
             #only need to train about once per iteration
             #and as long as pid 0 doesn't finish too early this will be fine
+            print('hit barrier')
+            self.trainingBarrier.wait()
+            print('past barrier')
             if pid == 0:
                 self.advTrain(i % 2)
+                self.sharedDict['advNet' + str(i % 2)] = self.advModels[i % 2].net
+                #TODO broadcast the trained network
+
+            self.trainingBarrier.wait()
+            self.advModels[i % 2].net = self.sharedDict['advNet' + str(i % 2)]
 
         #hopefully pid 0 doesn't finish too early
         #we could be smarter and make this the last pid to finish
@@ -182,7 +208,7 @@ class DeepCfrAgent:
         #and update average stategy
         #we should be okay adding this for rollouts
         #but I'm testing skipping rollouts
-        self.updateProbs(offPlayer, state, actions, probs, iter)
+        self.updateProbs(offPlayer, state, actions, probs, iter // 2 + 1)
 
         #on player
         request = (await queues[onPlayer].get())
@@ -299,5 +325,6 @@ class DeepCfrAgent:
 
     #adds sample of current strategy
     def updateProbs(self, player, state, actions, probs, iter):
+        print('updating probs for', player)
         sm = self.stratModels[player]
         sm.addSample(state, zip(actions, probs), iter)

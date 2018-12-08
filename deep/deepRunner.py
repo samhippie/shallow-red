@@ -2,6 +2,7 @@
 
 import asyncio
 import collections
+from concurrent.futures import ProcessPoolExecutor
 from contextlib import suppress
 import copy
 import math
@@ -10,10 +11,12 @@ import os
 import random
 import sys
 import subprocess
+import torch.multiprocessing as mp
 
 import moves
 from game import Game
 import deep.deepcfr as deepcfr
+import deep.dataStorage
 
 #This file has functions relating to running the AI
 #with the deep cfr configuration
@@ -28,9 +31,8 @@ async def playTestGame(teams, limit=100,
         numProcesses=1, advEpochs=100, stratEpochs=1000, branchingLimit=2, depthLimit=None, resumeIter=None,
         file=sys.stdout):
     try:
-        mainPs = await getPSProcess()
 
-        searchPs = [await getPSProcess() for i in range(numProcesses)]
+        #searchPs = [await getPSProcess() for i in range(numProcesses)]
 
         if not seed:
             seed = [
@@ -40,27 +42,71 @@ async def playTestGame(teams, limit=100,
                 random.random() * 0x10000,
             ]
 
-        agent = deepcfr.DeepCfrAgent(teams, format, advEpochs=advEpochs, stratEpochs=stratEpochs, branchingLimit=branchingLimit, depthLimit=depthLimit, resumeIter=resumeIter, verbose=False)
+        m = mp.Manager()
+        writeLock = m.Lock()
+        trainingBarrier = m.Barrier(numProcesses)
+        sharedDict = m.dict()
+
+        agents = []
+        for j in range(numProcesses):
+            agent = deepcfr.DeepCfrAgent(
+                    teams,
+                    format,
+                    advEpochs=advEpochs,
+                    stratEpochs=stratEpochs,
+                    branchingLimit=branchingLimit,
+                    depthLimit=depthLimit,
+                    resumeIter=resumeIter,
+                    writeLock=writeLock,
+                    trainingBarrier=trainingBarrier,
+                    sharedDict=sharedDict,
+                    verbose=False)
+            agents.append(agent)
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03
 
         #instead of searching per turn, do all searching ahead of time
-        searches = []
+        processes = []
         for j in range(numProcesses):
-            search = agent.search(
-                    ps=searchPs[j],
-                    pid=j,
-                    limit=limit,
-                    seed=seed,
-                    initActions=initMoves)
-            searches.append(search)
+            print(j)
+            def run():
+                print('running', j)
+                async def asyncRun():
+                    ps = await getPSProcess()
+                    try:
+                        await agents[j].search(
+                            ps=ps,
+                            pid=j,
+                            limit=limit,
+                            seed=seed,
+                            initActions=initMoves)
+                    finally:
+                        ps.terminate()
 
-        await asyncio.gather(*searches)
+                policy = asyncio.get_event_loop_policy()
+                policy.set_event_loop(policy.new_event_loop())
+                loop = asyncio.get_event_loop()
+                print(loop)
+                loop.run_until_complete(asyncRun())
+
+            p = mp.Process(target=run)
+            p.start()
+            processes.append(p)
+
+        for p in processes:
+            p.join()
+
+        #await asyncio.gather(*searches)
+
+        #everything from here on only needs a single agent
+        agent = agents[0]
 
         #we could have the agent do this when it's done training,
         #but I don't like having the agent worry about its own synchronization
         agent.stratTrain()
+
+        mainPs = await getPSProcess()
 
         #this needs to be a coroutine so we can cancel it when the game ends
         #which due to concurrency issues might not be until we get into the MCTS loop
@@ -137,8 +183,8 @@ async def playTestGame(teams, limit=100,
 
     finally:
         mainPs.terminate()
-        for ps in searchPs:
-            ps.terminate()
+        #for ps in searchPs:
+            #ps.terminate()
         #a little dirty, not all agents need to be closed
         if callable(getattr(agent, 'close', None)):
             agent.close()
