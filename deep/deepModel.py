@@ -22,7 +22,7 @@ dbConnect = "dbname='shallow-red' user='shallow-red' host='localhost' password='
 #model of the network
 #the topology of this really should be configurable
 class Net(nn.Module):
-    def __init__(self, softmax=False, width=1000):
+    def __init__(self, softmax=False, width=300):
         super(Net, self).__init__()
 
         self.softmax = softmax
@@ -68,10 +68,11 @@ class DeepCfrModel:
     #are almost the same (modelInput.numActions)
     #strategy is softmaxed, advantage is not
 
-    def __init__(self, name, softmax, writeLock, lr=0.001, sampleCacheSize=1000, clearDb=True):
+    def __init__(self, name, softmax, writeLock, sharedDict, lr=0.001, sampleCacheSize=1000, clearDb=True):
         self.softmax = softmax
         self.lr = lr
         self.writeLock = writeLock
+        self.sharedDict = sharedDict
 
         #if we're not clearing the db, then we should also load in the id map
         #so that the inputs to the model will match those in the db
@@ -106,7 +107,7 @@ class DeepCfrModel:
     def clearSampleCache(self):
         if len(self.sampleCache) == 0:
             return
-        deep.dataStorage.addSamples(self.writeLock, self.name, self.sampleCache)
+        deep.dataStorage.addSamples(self.writeLock, self.name, self.sampleCache, self.sharedDict)
         self.sampleCache = []
 
     #we need to clean our db, clear out caches
@@ -139,8 +140,10 @@ class DeepCfrModel:
         self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
         miniBatchSize = 100
 
-        dataset = deep.dataStorage.Dataset(self.name)
+        dataset = deep.dataStorage.Dataset(self.name, self.sharedDict)
         loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=True, num_workers=4)
+
+        print('dataset size:', dataset.size, file=sys.stderr)
 
         for i in range(epochs):
             for data, labels, iters in loader:
@@ -152,7 +155,7 @@ class DeepCfrModel:
                 loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))
                 #print the last 10 losses
                 if i > epochs-11:
-                    print(loss, file=sys.stderr)
+                    print(i, loss, file=sys.stderr)
                 #get gradient of loss
                 loss.backward()
                 #clip gradient norm, which was done in the paper

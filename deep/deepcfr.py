@@ -76,12 +76,12 @@ class DeepCfrAgent:
         if advModels:
             self.advModels = advModels
         else:
-            self.advModels = [DeepCfrModel(name='adv' + str(i), softmax=False, clearDb=clearDb, writeLock=writeLock) for i in range(2)]
+            self.advModels = [DeepCfrModel(name='adv' + str(i), softmax=False, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
 
         if stratModels:
             self.stratModels = stratModels
         else:
-            self.stratModels = [DeepCfrModel(name='strat' + str(i), softmax=True, clearDb=clearDb, writeLock=writeLock) for i in range(2)]
+            self.stratModels = [DeepCfrModel(name='strat' + str(i), softmax=True, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
 
         self.advEpochs = advEpochs
         self.stratEpochs = stratEpochs
@@ -106,16 +106,18 @@ class DeepCfrAgent:
         for i in range(start, limit):
             print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
 
-            #need idMap to be the same across processes
-            if pid == 0:
-                self.sharedDict['idMap'] = modelInput.idMap
-            elif 'idMap' in self.sharedDict:
-                modelInput.idMap = self.sharedDict['idMap']
+            #for small games, this is necessary to get a decent number of samples
+            for j in range(1):
+                #need idMap to be the same across processes
+                if pid == 0:
+                    self.sharedDict['idMap'] = modelInput.idMap
+                elif 'idMap' in self.sharedDict:
+                    modelInput.idMap = self.sharedDict['idMap']
 
-            game = Game(ps, self.teams, format=self.format, seed=seed, verbose=self.verbose)
-            await game.startGame()
-            await game.applyHistory(history)
-            await self.cfrRecur(ps, game, seed, history, i)
+                game = Game(ps, self.teams, format=self.format, seed=seed, verbose=self.verbose)
+                await game.startGame()
+                await game.applyHistory(history)
+                await self.cfrRecur(ps, game, seed, history, i)
 
             #save our adv data after each iteration
             #so the non-zero pid workers don't have data cached

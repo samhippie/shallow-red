@@ -105,8 +105,8 @@ async def main():
     #initMoves = ([' team 21'], [' team 12'])
 
     #initMoves = ([' team 12'], [' team 12'])
-    initMoves = ([' team 1'], [' team 1'])
-    #initMoves = ([], [])
+    #initMoves = ([' team 1'], [' team 1'])
+    initMoves = ([], [])
 
     #teams = (ovoTeams[5], ovoTeams[5])
     #initMoves = ([' team 2'], [' team 2'])
@@ -115,7 +115,7 @@ async def main():
 
     #clear out training data for fresh runs
     os.system('rm -r data')
-    await deepRunner.playTestGame(teams, format=format, limit=50, numProcesses=1, advEpochs=300, stratEpochs=2000, branchingLimit=None, depthLimit=5, initMoves=initMoves, resumeIter=None)
+    await deepRunner.playTestGame(teams, format=format, limit=50, numProcesses=3, advEpochs=300, stratEpochs=2000, branchingLimit=None, depthLimit=5, initMoves=initMoves, resumeIter=None)
 
     return
 
