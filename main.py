@@ -20,6 +20,7 @@ import montecarlo.rm as rm
 import montecarlo.oos as oos
 import montecarlo.cfr as cfr
 import runner
+import parallelRunner
 import deep.deepRunner as deepRunner
 import deep.dataStorage
 
@@ -81,17 +82,17 @@ tvtTeams = [
 ]
 
 async def main():
-    format = '1v1'
-    #format = '2v2doubles'
+    #format = '1v1'
+    format = '2v2doubles'
     #format='singles'
     #format='vgc'
 
     #teams = (singlesTeams[0], singlesTeams[1])
     #gen 1 starters mirror
-    teams = (ovoTeams[4], ovoTeams[4])
+    #teams = (ovoTeams[4], ovoTeams[4])
 
     #groudon vs lunala vgv19
-    #teams = (tvtTeams[3], tvtTeams[4])
+    teams = (tvtTeams[3], tvtTeams[4])
     #fini vs koko vgc17
     #teams = (tvtTeams[1], tvtTeams[5])
 
@@ -105,16 +106,18 @@ async def main():
     #teams = (tvtTeams[1], tvtTeams[6])
     #initMoves = ([' team 21'], [' team 12'])
 
-    #initMoves = ([' team 12'], [' team 12'])
-    initMoves = ([' team 1'], [' team 1'])
+    initMoves = ([' team 12'], [' team 12'])
+    #initMoves = ([' team 1'], [' team 1'])
     #initMoves = ([], [])
 
     #teams = (ovoTeams[5], ovoTeams[5])
     #initMoves = ([' team 2'], [' team 2'])
 
-    await runner.playTestGame(teams, format=format, limit=1000, numProcesses=8, initMoves=initMoves, algo='rm')#, bootstrapAlgo='rm', bootstrapPercentage=100)
+    #await runner.playTestGame(teams, format=format, limit=1000, numProcesses=8, initMoves=initMoves, algo='rm')#, bootstrapAlgo='rm', bootstrapPercentage=100)
 
-    #await deepRunner.playTestGame(teams, format=format, limit=10, numProcesses=14, advEpochs=100, stratEpochs=100, branchingLimit=1, depthLimit=5, initMoves=initMoves, resumeIter=None)
+    #await parallelRunner.playTestGame(teams, format=format, limit=1000, numProcesses=16, initMoves=initMoves, algo='rm')
+
+    await deepRunner.playTestGame(teams, format=format, limit=50, numProcesses=16, advEpochs=2000, stratEpochs=20000, branchingLimit=1, depthLimit=5, initMoves=initMoves, resumeIter=None)
 
     return
 

@@ -10,6 +10,7 @@ import os
 import random
 import sys
 import subprocess
+import torch.multiprocessing as mp
 
 import moves
 from game import Game
@@ -321,7 +322,6 @@ async def trainModel(teams, format, games=100, epochs=100, numProcesses=1, value
             ps.terminate()
     return valueModel
 
-
 async def playTestGame(teams, limit=100, time=None,
         format='1v1', seed=None, initMoves=([],[]),
         numProcesses=1,
@@ -403,7 +403,6 @@ async def playTestGame(teams, limit=100, time=None,
                                 seed=seed,
                                 initActions=[p1Actions, p2Actions])
                         searches.append(search)
-
 
                     #there's a timeout function, but I got this working first
                     if time:

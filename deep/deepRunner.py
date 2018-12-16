@@ -86,7 +86,6 @@ async def playTestGame(teams, limit=100,
                 policy = asyncio.get_event_loop_policy()
                 policy.set_event_loop(policy.new_event_loop())
                 loop = asyncio.get_event_loop()
-                print(loop)
                 loop.run_until_complete(asyncRun())
 
             p = mp.Process(target=run)

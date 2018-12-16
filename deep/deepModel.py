@@ -139,40 +139,44 @@ class DeepCfrModel:
         miniBatchSize = 4
 
         dataset = deep.dataStorage.Dataset(self.name, self.sharedDict)
-        loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=True, num_workers=0, pin_memory=True)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=True, num_workers=4, pin_memory=True)
 
         print('dataset size:', dataset.size, file=sys.stderr)
 
+        batchIter = iter(loader)
         for i in range(epochs):
             #print('getting data from loader', file=sys.stderr)
-            for data, labels, iters in loader:
+            try:
+                data, labels, iters = next(batchIter)
+            except StopIteration:
+                batchIter = iter(loader)
+                data, labels, iters = next(batchIter)
 
-                #print('moving data to device', file=sys.stderr)
-                data = data.to(device)
-                labels = labels.to(device)
-                iters = iters.to(device)
-                
-                #print('getting ys', file=sys.stderr)
-                #evaluate on network
-                self.optimizer.zero_grad()
-                ys = self.net(data)
+            #print('moving data to device', file=sys.stderr)
+            data = data.to(device)
+            labels = labels.to(device)
+            iters = iters.to(device)
+            
+            #print('getting ys', file=sys.stderr)
+            #evaluate on network
+            self.optimizer.zero_grad()
+            ys = self.net(data)
 
-                #print('getting loss', file=sys.stderr)
-                #loss function from the paper
-                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))
-                #print the last 10 losses
-                if i > epochs-11:
-                    print(i, loss, file=sys.stderr)
-                #get gradient of loss
-                #print('backward', file=sys.stderr)
-                loss.backward()
-                #clip gradient norm, which was done in the paper
-                #print('clip', file=sys.stderr)
-                nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
-                #train the network
-                #print('step', file=sys.stderr)
-                self.optimizer.step()
-                #print('done with step', file=sys.stderr)
-            #print('done with that loader loop')
+            #print('getting loss', file=sys.stderr)
+            #loss function from the paper
+            loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))
+            #print the last 10 losses
+            if i > epochs-11:
+                print(i, loss, file=sys.stderr)
+            #get gradient of loss
+            #print('backward', file=sys.stderr)
+            loss.backward()
+            #clip gradient norm, which was done in the paper
+            #print('clip', file=sys.stderr)
+            nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
+            #train the network
+            #print('step', file=sys.stderr)
+            self.optimizer.step()
+            #print('done with step', file=sys.stderr)
 
         self.net = self.net.to(torch.device('cpu'))

@@ -221,7 +221,8 @@ class DeepCfrAgent:
         #and update average stategy
         #we should be okay adding this for rollouts
         #but I'm testing skipping rollouts
-        self.updateProbs(offPlayer, state, actions, probs, iter // 2 + 1)
+        if not rollout:
+            self.updateProbs(offPlayer, state, actions, probs, iter // 2 + 1)
 
         #on player
         request = (await queues[onPlayer].get())

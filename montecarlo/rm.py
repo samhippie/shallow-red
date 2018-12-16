@@ -110,11 +110,11 @@ class RegretMatchAgent:
 
         #this throws away some good data, but I'm not sure it will matter too much
         #right now memory usage is our biggest enemy
-        if self.tableType == MEMORY:
-            self.regretTables = [{}, {}]
-            self.probTables = [{}, {}]
-            self.rewardTable = {}
-            self.countTable = {}
+        #if self.tableType == MEMORY:
+            #self.regretTables = [{}, {}]
+            #self.probTables = [{}, {}]
+            #self.rewardTable = {}
+            #self.countTable = {}
 
         #turn init actions into a useful history
         history = [(None, a1, a2) for a1, a2 in zip(*initActions)]
