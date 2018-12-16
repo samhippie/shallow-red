@@ -13,6 +13,7 @@ import modelInput
 import moves
 
 from deep.deepModel import DeepCfrModel
+import deep.dataStorage
 
 #Deep MCCFR
 
@@ -70,8 +71,10 @@ class DeepCfrAgent:
         self.trainingBarrier = trainingBarrier
         self.sharedDict = sharedDict
 
-        #if we are resuming, then we don't want to clear the db
-        clearDb = resumeIter == None
+        if resumeIter == None:
+            #fresh start, delete old data
+            deep.dataStorage.clearData()
+            
 
         if advModels:
             self.advModels = advModels
@@ -102,14 +105,16 @@ class DeepCfrAgent:
 
         start = self.resumeIter if self.resumeIter else 0
 
-        print(end='', file=sys.stderr)
+        if self.pid == 0:
+            print(end='', file=sys.stderr)
         for i in range(start, limit):
-            print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
+            if self.pid == 0:
+                print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
 
-            #for small games, this is necessary to get a decent number of samples
+            #for self.small games, this is necessary to get a decent number of samples
             for j in range(1):
                 #need idMap to be the same across processes
-                if pid == 0:
+                if self.pid == 0:
                     self.sharedDict['idMap'] = modelInput.idMap
                 elif 'idMap' in self.sharedDict:
                     modelInput.idMap = self.sharedDict['idMap']
@@ -126,7 +131,7 @@ class DeepCfrAgent:
             #only need to train about once per iteration
             #and as long as pid 0 doesn't finish too early this will be fine
             self.trainingBarrier.wait()
-            if pid == 0:
+            if self.pid == 0:
                 self.advTrain(i % 2)
                 self.sharedDict['advNet' + str(i % 2)] = self.advModels[i % 2].net
             self.trainingBarrier.wait()
@@ -138,14 +143,16 @@ class DeepCfrAgent:
 
         self.trainingBarrier.wait()
 
-        print(file=sys.stderr)
+        if self.pid == 0:
+            print(file=sys.stderr)
 
     def advTrain(self, player):
         model = self.advModels[player]
         model.train(epochs=self.advEpochs)
 
     def stratTrain(self):
-        print('training strategy', file=sys.stderr)
+        if self.pid == 0:
+            print('training strategy', file=sys.stderr)
         #we train both strat models at once
         for model in self.stratModels:
             model.train(epochs=self.stratEpochs)
@@ -208,7 +215,7 @@ class DeepCfrAgent:
         actions = moves.getMoves(self.format, req)
         #just sample a move
         probs = self.regretMatch(offPlayer, state, actions, -1)
-        if depth == 0:
+        if depth == 0 and self.pid == 0:
             print('player ' + str(offPlayer) + ' probs', list(zip(actions, probs)), file=sys.stderr)
         offAction = np.random.choice(actions, p=probs)
         #and update average stategy
@@ -225,7 +232,7 @@ class DeepCfrAgent:
         state = req['state']
         actions = moves.getMoves(self.format, req)
         probs = self.regretMatch(onPlayer, state, actions, depth)
-        if depth == 0:
+        if depth == 0 and self.pid == 0:
             print('player ' + str(onPlayer) + ' probs', list(zip(actions, probs)), file=sys.stderr)
         if rollout:
             #we pick one action according to the current strategy
@@ -292,7 +299,7 @@ class DeepCfrAgent:
             am = self.advModels[onPlayer]
             am.addSample(state, zip(actions, advantages), iter // 2 + 1)
 
-            if depth == 0:
+            if depth == 0 and self.pid == 0:
                 print('player', str(onPlayer), file=sys.stderr)
                 print('stateExpValue', stateExpValue, 'from', list(zip(probs, rewards)), file=sys.stderr)
                 print('advantages', list(zip(actions, advantages)), file=sys.stderr)
@@ -312,7 +319,7 @@ class DeepCfrAgent:
         probs = []
         for n in actionNums:
             probs.append(max(0, advs[n]))
-        if depth == 0:
+        if depth == 0 and self.pid == 0:
             print('predicted advantages', [(action, advs[n]) for action, n in zip(actions, actionNums)], file=sys.stderr)
         probs = np.array(probs)
         pSum = np.sum(probs)

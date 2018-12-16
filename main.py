@@ -21,6 +21,7 @@ import montecarlo.oos as oos
 import montecarlo.cfr as cfr
 import runner
 import deep.deepRunner as deepRunner
+import deep.dataStorage
 
 
 
@@ -105,17 +106,15 @@ async def main():
     #initMoves = ([' team 21'], [' team 12'])
 
     #initMoves = ([' team 12'], [' team 12'])
-    #initMoves = ([' team 1'], [' team 1'])
-    initMoves = ([], [])
+    initMoves = ([' team 1'], [' team 1'])
+    #initMoves = ([], [])
 
     #teams = (ovoTeams[5], ovoTeams[5])
     #initMoves = ([' team 2'], [' team 2'])
 
-    #await runner.playTestGame(teams, format=format, limit=100, numProcesses=1, initMoves=initMoves, algo='cfr')#, bootstrapAlgo='rm', bootstrapPercentage=100)
+    await runner.playTestGame(teams, format=format, limit=1000, numProcesses=8, initMoves=initMoves, algo='rm')#, bootstrapAlgo='rm', bootstrapPercentage=100)
 
-    #clear out training data for fresh runs
-    os.system('rm -r data')
-    await deepRunner.playTestGame(teams, format=format, limit=50, numProcesses=3, advEpochs=300, stratEpochs=2000, branchingLimit=None, depthLimit=5, initMoves=initMoves, resumeIter=None)
+    #await deepRunner.playTestGame(teams, format=format, limit=10, numProcesses=14, advEpochs=100, stratEpochs=100, branchingLimit=1, depthLimit=5, initMoves=initMoves, resumeIter=None)
 
     return
 

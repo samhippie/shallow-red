@@ -5,6 +5,7 @@ import modelInput
 import numpy as np
 import os
 import os.path
+import sys
 import torch
 import torch.utils.data
 import torch.multiprocessing as mp
@@ -12,15 +13,20 @@ import torch.multiprocessing as mp
 #this manages the training data for deep cfr
 
 #directory where samples are stored
-#directory should exist, and there should be a (possibly empty) "index" file
-DATA_DIR = './data/'
+DATA_DIR = '/home/sam/data/'
+#DATA_DIR = './data/'
 
 #whether to store data in memory or on disk
 IN_MEMORY = False
 
 #whether to cache each sample in-memory on read
 #this only has an effect when IN_MEMORY is False
-BIG_CACHE = True
+BIG_CACHE = False
+
+#deletes the data from DATA_DIR
+#does not delete the folder itself
+def clearData():
+    os.system('rm -r ' + DATA_DIR + '*')
 
 #lock is a multiprocess manager lock
 #id determines which dataset the samples belong to
@@ -73,8 +79,10 @@ def addSamples(lock, id, samples, sharedDict):
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, id, sharedDict):
+        #print('initing dataloader', file=sys.stderr)
         self.id = id
         if IN_MEMORY:
+            #print('initing in memory', file=sys.stderr)
             self.sharedDict = sharedDict
             if 'smp' + id not in sharedDict:
                 self.size = 0
@@ -83,6 +91,7 @@ class Dataset(torch.utils.data.Dataset):
                 self.samples = sharedDict['smp' + id]
                 self.size = self.samples.shape[0]
         else:
+            #print('initing on disk', file=sys.stderr)
             self.sampleCache = {}
             with open(DATA_DIR + 'index', 'r') as file:
                 for line in file.readlines():
@@ -91,12 +100,16 @@ class Dataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
         if IN_MEMORY:
+            #print('getting sample from memory', file=sys.stderr)
             sample = self.samples[idx]
+            #print('got sample from memory', file=sys.stderr)
         else:
+            #print('getting sample from disk', file=sys.stderr)
             if idx not in self.sampleCache:
                 with open(DATA_DIR + self.id + '/' + str(idx), 'rb') as file:
                     self.sampleCache[idx] = np.load(file)
             sample = self.sampleCache[idx]
+            #print('got sample from disk', file=sys.stderr)
 
         data = sample[0:modelInput.stateSize]
         data = torch.from_numpy(data).float()

@@ -72,7 +72,7 @@ def stateToTensor(state):
         monList = np.zeros(num * size)
         for monId in player['mons']:
             mon = player['mons'][monId]
-            monPlace = enumId('mon-id', monId)
+            monPlace = enumId('mon-id' + str(i), monId)
 
             #go through each field
             sublists = []
@@ -195,7 +195,7 @@ def enumAction(action):
     if not enumActionMap:
         genActionMap()
     #pass,pass is more orthogonal
-    if action.strip == 'noop':
+    if action.strip() == 'noop':
         action = ' pass,pass'
     #convert singles actions to a canonical form
     elif ',' not in action and 'team' not in action:
