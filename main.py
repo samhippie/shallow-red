@@ -23,7 +23,7 @@ import runner
 import parallelRunner
 import deep.deepRunner as deepRunner
 import deep.dataStorage
-
+import deep.testRunner
 
 
 
@@ -82,6 +82,15 @@ tvtTeams = [
 ]
 
 async def main():
+    try:
+        ps = await deepRunner.getPSProcess()
+        for i in range(1000):
+            await deep.testRunner.randomGame(ps)
+    finally:
+        ps.terminate()
+    return
+
+
     #format = '1v1'
     format = '2v2doubles'
     #format='singles'
