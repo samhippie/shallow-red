@@ -5,6 +5,7 @@ import modelInput
 import numpy as np
 import os
 import os.path
+import pickle
 import sys
 import torch
 import torch.utils.data
@@ -71,12 +72,12 @@ def addSamples(lock, id, samples, sharedDict):
 
     if not IN_MEMORY:
         #write our each sample to its own file
-        #TODO each sample is now a (np, np, int) tuple
         if not os.path.exists(DATA_DIR + id):
             os.mkdir(DATA_DIR + id)
         for i in range(len(samples)):
             with open(DATA_DIR + id + '/' + str(count + i), 'wb+') as file:
-                np.save(file, samples[i])
+                pickle.dump(samples[i], file)
+                #np.save(file, samples[i])
 
 
 class Dataset(torch.utils.data.Dataset):
@@ -110,20 +111,23 @@ class Dataset(torch.utils.data.Dataset):
             #if idx not in self.sampleCache:
             with open(DATA_DIR + self.id + '/' + str(idx), 'rb') as file:
                 #self.sampleCache[idx] = np.load(file)
-                sample = np.load(file)
+                #sample = np.load(file)
+                sample = pickle.load(file)
             #sample = self.sampleCache[idx]
             #print('got sample from disk', file=sys.stderr)
 
         #data = sample[0:modelInput.stateSize]
         #label = sample[modelInput.stateSize:modelInput.stateSize + modelInput.numActions]
 
-        data = sample[0:-(self.outputSize + 1)]
+        data, label, iter = sample
+
+        #data = sample[0:-(self.outputSize + 1)]
         data = torch.from_numpy(data).float()
 
-        label = sample[-(self.outputSize + 1):-1]
+        #label = sample[-(self.outputSize + 1):-1]
         label = torch.from_numpy(label).float()
 
-        iter = sample[-1:]
+        #iter = sample[-1:]
         iter = torch.from_numpy(iter).float()
 
         return data, label, iter

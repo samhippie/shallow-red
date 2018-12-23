@@ -16,6 +16,7 @@ import torch.multiprocessing as mp
 import full.game
 from full.game import Game
 import full.deepcfr as deepcfr
+import full.testRunner
 
 #This file has functions relating to running the AI
 
@@ -24,20 +25,13 @@ PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
 PS_ARG = 'simulate-battle'
 
 async def playTestGame(limit=100,
-        format='1v1', seed=None, initMoves=[],
-        numProcesses=1, advEpochs=100, stratEpochs=1000, branchingLimit=2, depthLimit=None, resumeIter=None,
+        format='1v1', seed=None, history=[[],[]],
+        numProcesses=1, advEpochs=100, stratEpochs=1000, 
+        branchingLimit=2, depthLimit=None, resumeIter=None,
         file=sys.stdout):
     try:
-
-        #searchPs = [await getPSProcess() for i in range(numProcesses)]
-
         if not seed:
-            seed = [
-                random.random() * 0x10000,
-                random.random() * 0x10000,
-                random.random() * 0x10000,
-                random.random() * 0x10000,
-            ]
+            seed = full.game.getSeed()
 
         m = mp.Manager()
         writeLock = m.Lock()
@@ -54,7 +48,7 @@ async def playTestGame(limit=100,
                 writeLock=writeLock,
                 trainingBarrier=trainingBarrier,
                 sharedDict=sharedDict,
-                verbose=False)
+                verbose=True)
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03
@@ -68,7 +62,7 @@ async def playTestGame(limit=100,
                     pid=0,
                     limit=limit,
                     seed=seed,
-                    initActions=initMoves)
+                    history=history)
             finally:
                 ps.terminate()
 
@@ -85,7 +79,7 @@ async def playTestGame(limit=100,
                             pid=j,
                             limit=limit,
                             seed=seed,
-                            initActions=initMoves)
+                            history=history)
                     finally:
                         ps.terminate()
 
@@ -152,7 +146,7 @@ async def playTestGame(limit=100,
                 random.random() * 0x10000,
                 random.random() * 0x10000,
             ]
-            game = Game(mainPs, format=format, teams=teams, seed=seed, history=initMoves, verbose=True, file=file)
+            game = Game(mainPs, format=format, teams=teams, seed=seed, history=history, verbose=True, file=file)
             await game.startGame()
             gameTask = asyncio.ensure_future(play(game))
             winner = await game.winner

@@ -12,7 +12,7 @@ import torch.utils.data
 from torchvision import transforms
 
 import full.dataStorage
-from full.action import actionMap
+import full.game
 
 def numToBinary(num):
     n = num % 1024
@@ -30,14 +30,15 @@ def infosetToTensor(infoset):
     if not numberMap:
         for i in range(1024):
             numberMap[str(i)] = numToBinary(i)
-    return np.array([np.array([1, numberMap[token]], dtype=np.long) if token in numberMap else np.array([0, hash(token)], dtype=np.long) for token in infoset])
+    t = np.stack([np.concatenate([[1], numberMap[token]]) if token in numberMap else np.concatenate([[0, hash(token)], np.zeros(9, dtype=np.long)]) for token in infoset])
+    return t
 
 #model of the network
 class Net(nn.Module):
     def __init__(self, embedSize=20, lstmSize=30, width=30, softmax=False):
         super(Net, self).__init__()
 
-        self.outputSize = len(actionMap)
+        self.outputSize = full.game.numActions
 
         self.softmax = softmax
         self.embedSize = embedSize
@@ -68,7 +69,7 @@ class Net(nn.Module):
         lstmInput = []
         for token in infoset:
             if token[0] == 1: #number input
-                val = torch.cat([torch.zeros(self.embedSize), token[1]])
+                val = torch.cat([torch.zeros(self.embedSize), token[1:].float()])
             else:
                 val = torch.cat([self.embeddings(token[1].view(1, -1)).view(-1), torch.zeros(10)])
             lstmInput.append(val)
@@ -104,7 +105,7 @@ class DeepCfrModel:
         self.lr = lr
         self.writeLock = writeLock
         self.sharedDict = sharedDict
-        self.outputSize = len(actionMap)
+        self.outputSize = full.game.numActions
 
         self.net = Net(softmax=softmax)
         self.optimizer = optim.Adam(self.net.parameters(), lr=lr)
@@ -123,11 +124,12 @@ class DeepCfrModel:
 
         labelTensor = np.zeros(self.outputSize)
         for action, value in label:
-            n = actionMap[action]
+            n = full.game.enumAction(action)
             labelTensor[n] = value
 
-        #TODO restructure this so that the infoset tensor can have a variable size
-        self.sampleCache.append((infosetTensor, labelTensor, iter))
+        iterTensor = np.array([iter])
+
+        self.sampleCache.append((infosetTensor, labelTensor, iterTensor))
         if len(self.sampleCache) > self.sampleCacheSize:
             self.clearSampleCache()
 

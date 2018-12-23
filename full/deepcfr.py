@@ -12,7 +12,6 @@ import full.game
 from full.game import Game
 import full.model
 import full.dataStorage
-from full.action import actionMap
 
 #Deep MCCFR
 
@@ -91,9 +90,8 @@ class DeepCfrAgent:
 
         self.verbose = verbose
 
-    async def search(self, ps, pid=0, limit=100, seed=None, initActions=[]):
+    async def search(self, ps, pid=0, limit=100, innerLoops=1, seed=None, history=[[],[]]):
         self.pid = pid
-
 
         start = self.resumeIter if self.resumeIter else 0
 
@@ -104,12 +102,10 @@ class DeepCfrAgent:
                 print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
 
             #for self.small games, this is necessary to get a decent number of samples
-            for j in range(1):
-                #need idMap to be the same across processes
-
-                game = Game(ps, format=self.format, seed=seed, history=initActions, verbose=self.verbose)
+            for j in range(innerLoops):
+                game = Game(ps, format=self.format, seed=seed, history=history, verbose=self.verbose)
                 await game.startGame()
-                await self.cfrRecur(ps, game, seed, initActions, i)
+                await self.cfrRecur(ps, game, seed, history, i)
 
             #save our adv data after each iteration
             #so the non-zero pid workers don't have data cached
@@ -147,7 +143,7 @@ class DeepCfrAgent:
     def getProbs(self, player, infoset, actions):
         sm = self.stratModels[player]
         stratProbs = sm.predict(infoset)
-        actionNums = [actionMap[a] for a in actions]
+        actionNums = [full.game.enumAction(a) for a in actions]
         probs = []
         for n in actionNums:
             probs.append(stratProbs[n])
@@ -194,9 +190,14 @@ class DeepCfrAgent:
 
             if depth == 0 and self.pid == 0:
                 print('player ' + str(player) + ' probs', list(zip(actions, probs)), file=sys.stderr)
-
             await game.takeAction(player, req, action)
-            return await self.cfrRecur(ps, game, startSeed, history, iter, depth, rollout)
+
+            if player == 0:
+                newHistory = [history[0] + [(None, action)], history[1]]
+            else:
+                newHistory = [history[0], history[1] + [(None, action)]]
+
+            return await self.cfrRecur(ps, game, startSeed, newHistory, iter, depth, rollout)
 
         elif player == onPlayer:
             #get probs, which action we take depends on the configuration
@@ -242,9 +243,14 @@ class DeepCfrAgent:
                 #this is closer to normal external sampling
                 #seed = await game.resetSeed()
                 await game.takeAction(player, req, action)
-                historyEntry = (None, player, action)
+                #historyEntry = (None, player, action)
 
-                r = await self.cfrRecur(ps, game, startSeed, history + [historyEntry], iter, depth=depth+1, rollout=curRollout)
+                if player == 0:
+                    newHistory = [history[0] + [(None, action)], history[1]]
+                else:
+                    newHistory = [history[0], history[1] + [(None, action)]]
+
+                r = await self.cfrRecur(ps, game, startSeed, newHistory, iter, depth=depth+1, rollout=curRollout)
                 rewards.append(r)
 
             if not rollout:
@@ -274,7 +280,7 @@ class DeepCfrAgent:
     def regretMatch(self, player, infoset, actions, depth):
         am = self.advModels[player]
         advs = am.predict(infoset)
-        actionNums = [actionMap[a] for a in actions]
+        actionNums = [full.game.enumAction(a) for a in actions]
         probs = []
         for n in actionNums:
             probs.append(max(0, advs[n]))

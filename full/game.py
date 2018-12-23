@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 
 import asyncio
+import copy
 import json
 import numpy as np
 import random
 import sys
+
+from full.action import actionMap
+
+numActions = len(actionMap)
 
 uselessPrefixes = [
     'player', 'teamsize', 'gametype', 'gen', 'tier', 'seed',
@@ -52,8 +57,8 @@ def getSeed():
 class Game:
 
     #new constructor for the more generic game implementation
-    #history is now a set of (seed, player, action) tuples
-    def __init__(self, ps, format, seed=None, names=['bot1', 'bot2'], history=[], verbose=False, file=sys.stdout):
+    #history is now a set of (seed, action) tuples for each player
+    def __init__(self, ps, format, seed=None, names=['bot1', 'bot2'], history=[[],[]], verbose=False, file=sys.stdout):
         self.ps = ps
         self.format = format
         self.seed = seed
@@ -92,12 +97,32 @@ class Game:
     async def startGame(self):
         await self.sendCmd('>start {"formatid":"gen7' + self.psFormat + '"' + (',"seed":' + str(self.seed) if self.seed else '') + '}')
 
-        for (seed, player, action) in self.history:
+        asyncio.ensure_future(self.runInputLoop())
+
+        #have to execute each player's history
+        #is it necessary to copy here?
+        h = [copy.copy(self.history[0]), copy.copy(self.history[1])]
+        print()
+        print('history', h)
+        print()
+        while len(h[0]) or len(h[1]):
+            #both players may have requests, but we might only have history for one
+            if len(h[0]) and not len(h[1]):
+                prefPlayer = 0
+            elif len(h[1]) and not len(h[0]):
+                prefPlayer = 1
+            else:
+                prefPlayer = None
+
+            player, req, actions = await self.getTurn(prefPlayer)
+            print(player, 'for history, got', req)
+            seed, action = h[player][0]
+            del h[player][0]
             if seed != None:
                 await self.sendCmd('>resetPRNG ' + seed)
-            await self.sendCmd('>p' + str(player+1) + ' ' + action)
+            print('on resume')
+            await self.takeAction(player, req, action)
 
-        asyncio.ensure_future(self.runInputLoop())
 
 
     #puts the requests in their queues
@@ -109,6 +134,7 @@ class Game:
             return (await self.ps.stdout.readline()).decode('UTF-8')
 
         while True:
+            print('getting line')
             line = await getLine()
 
             if self.verbose:
@@ -140,6 +166,7 @@ class Game:
 
             elif line.startswith('|error'):
                 print('ERROR', line, file=sys.stderr)
+                quit()
                 #this should never happen
 
             elif line.startswith('|win'):
@@ -160,8 +187,7 @@ class Game:
                 #public info
                 self.infosets[0] += tokenize(line, 0)
                 self.infosets[1] += tokenize(line, 1)
-
-
+        print('out of input loop')
 
     #returns whose turn it is
     async def getPlayer(self):
@@ -174,9 +200,15 @@ class Game:
     #stores values so safe to call multiple times
     #values will be refreshed if a players has taken a turn
     #takeAction() expects that the given action is for the last turn returned by getTurn()
-    async def getTurn(self):
+    async def getTurn(self, prefPlayer=None):
         if not self.waitingOnAction:
-            if self.reqQueues[0].qsize() > 0:
+            #optionally, we might get a request for a specific player's turn
+            #even if prefPlayer is specified, we won't invalidate outstanding requests
+            #so we still obey waitingOnAction
+            if prefPlayer != None:
+                self.curReq = await self.reqQueues[prefPlayer].get()
+                self.curPlayer = prefPlayer
+            elif self.reqQueues[0].qsize() > 0:
                 self.curReq = await self.reqQueues[0].get()
                 self.curPlayer = 0
             else:
@@ -189,25 +221,31 @@ class Game:
     def getInfoset(self, player):
         return self.infosets[player]
 
+    #TODO remove req if we're not going to use it
     async def takeAction(self, player, req, action):
         self.waitingOnAction = False
         self.infosets[player].append(action)
-        if 'teambuilding' in req:
-            cmd = '>player p' + str(player+1) + ' {"name":"' + self.names[player] + '", "avatar": "43", "team":"' + action + '"}'
-            await self.sendCmd(cmd)
-        elif action == 'nop':
-            pass
-        else:
-            await self.sendCmd(action, player)
+        await self.sendCmd(action, player)
         
 
     async def sendCmd(self, cmd, player=None):
+        if cmd == 'noop':
+            #showdown doesn't expect any input
+            return
+        if cmd.startswith('setteam '):
+            #teambuilding is handled outside of the actual game, so it's not a normal command
+            team = cmd[8:]
+            msg = '>player p' + str(player+1) + ' {"name":"' + self.names[player] + '", "avatar": "43", "team":"' + team + '"}'
+            if(self.verbose):
+                print('sending', msg, file=self.file)
+            self.ps.stdin.write(bytes(msg + '\n', 'UTF-8'))
+            return
         if player != None:
             header = '>p' + str(player+1) + ' '
         else:
             header = ''
         if(self.verbose):
-            print(header + cmd, file=self.file)
+            print('sending', header + cmd, file=self.file)
         self.ps.stdin.write(bytes(header + cmd + '\n', 'UTF-8'))
 
     async def resetSeed(self):
@@ -257,7 +295,7 @@ def makeTeams(numMons, teamSize, numInFront):
         #there is one choice, the empty team
         back = [[]]
     teams = combineTeamSets(leads, back)
-    return [' team ' + ''.join([str(t) for t in team]) for team in teams]
+    return ['team ' + ''.join([str(t) for t in team]) for team in teams]
 
 #maps format => teams
 #teamCache = {}
@@ -285,8 +323,8 @@ def getMovesImpl(format, req):
     elif 'teambuilding' in req:
         #for now, we'll just give a pool of teams to pick from
         teams = [
-            '|charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||',
-            '|charmander|leftovers||flamethrower,icebeam,dragondance,hyperbeam|Modest|,,,252,4,252|M||||]|bulbasaur|lifeorb||gigadrain,powerwhip,sludgebomb,rockslide|Adamant|252,252,,,,4|M||||]|squirtle|lifeorb||fakeout,earthquake,hydropump,freezedry|Timid|,4,,252,,252|M||||',
+            'setteam |charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||',
+            'setteam |charmander|leftovers||flamethrower,icebeam,dragondance,hyperbeam|Modest|,,,252,4,252|M||||]|bulbasaur|lifeorb||gigadrain,powerwhip,sludgebomb,rockslide|Adamant|252,252,,,,4|M||||]|squirtle|lifeorb||fakeout,earthquake,hydropump,freezedry|Timid|,4,,252,,252|M||||',
         ]
         return teams
     elif 'win' in req:
@@ -324,12 +362,12 @@ def getMovesImpl(format, req):
             switchTargets = [int(a.split(' ')[1]) for a in set if 'switch' in a]
             _,  counts = np.unique(switchTargets, return_counts=True)
             if not any(counts > 1):
-                actions.append(' ' + ','.join(set))
+                actions.append(','.join(set))
             elif len(actionCross) == 1:#only one mon left
                 #need to pass some of the switches
                 #the proper way is to replace all duplicates with a pass
                 #I'm just going to hard code this for doubles
-                actions.append(' ' + set[0] + ',pass')
+                actions.append(set[0] + ',pass')
             # else: it's just an illegal action
         return actions
 
@@ -356,7 +394,7 @@ def getMovesImpl(format, req):
                     #elif move['target'] == 'allySide':
                         #targets = ['-1' if i == 1 else '-2']
                     elif move['target'] in ['all', 'self', 'allAdjacentFoes', 'allAdjacent', 'randomNormal', 'foeSide', 'allySide']:
-                        targets = ['']
+                        targets = []
                     elif move['target'] in ['normal', 'any']:
                         targets = ['-1' if i == 1 else '-2', '1', '2']
                     if len(targets) > 0:
@@ -382,7 +420,7 @@ def getMovesImpl(format, req):
             switchTargets = [int(a.split(' ')[1]) for a in set if 'switch' in a]
             _,  counts = np.unique(switchTargets, return_counts=True)
             if not any(counts > 1):
-                actions.append(' ' + ','.join(set))
+                actions.append(','.join(set))
         return actions
 
 
@@ -419,3 +457,30 @@ def prettyPrintMove(jointAction, req):
     actionString = ','.join(actionText)
 
     return actionString
+
+
+
+def enumAction(action):
+    #we have to to some modifications to put actions in a consistent format
+
+    #pass,pass is more orthogonal
+    if action.strip() == 'noop':
+        action = 'pass,pass'
+    #convert singles actions to a canonical form
+    elif ',' not in action and 'team' not in action:
+        action += ',pass'
+    #if there's a move with no target, set the target to 1
+    fixedAction = []
+    for part in action.split(','):
+        part = part.strip()
+        if 'move' in part:
+            components = part.split(' ')
+            #add a default target
+            if len(components) == 2:
+                components.append('1')
+            part = ' '.join(components)
+        fixedAction.append(part)
+
+    action = ','.join(fixedAction)
+
+    return actionMap[action]
