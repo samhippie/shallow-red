@@ -328,4 +328,9 @@ def insertSublist(xs, pos, oneHot, size=None):
     np.put(xs, range(pos * size, (pos+1) * size), oneHot)
 
 if __name__ == '__main__':
-    print(enumAction('noop'))
+    genActionMap()
+    i = len(enumActionMap)
+    #manually add some teams here
+    enumActionMap['|charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||'] = i
+    enumActionMap['|charmander|leftovers||flamethrower,icebeam,dragondance,hyperbeam|Modest|,,,252,4,252|M||||]|bulbasaur|lifeorb||gigadrain,powerwhip,sludgebomb,rockslide|Adamant|252,252,,,,4|M||||]|squirtle|lifeorb||fakeout,earthquake,hydropump,freezedry|Timid|,4,,252,,252|M||||'] = i+1
+    print(enumActionMap)

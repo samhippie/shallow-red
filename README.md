@@ -7,3 +7,4 @@ The main MCTS algorithms used come from [http://mlanctot.info/files/papers/cig14
 [https://www.aaai.org/ocs/index.php/AAAI/AAAI12/paper/viewFile/4937/5469](https://www.aaai.org/ocs/index.php/AAAI/AAAI12/paper/viewFile/4937/5469).
 
 Depends on pytorch, sqlitedict, psycopg (some of these can probably be removed)
+Also depends on [https://github.com/YannDubs/Hash-Embeddings](https://github.com/YannDubs/Hash-Embeddings), and assumes that the hashembed directory can be found in $PYTHONPATH (i.e. import hashembed should work)

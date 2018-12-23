@@ -6,21 +6,33 @@ import numpy as np
 import random
 import sys
 
-
+uselessPrefixes = [
+    'player', 'teamsize', 'gametype', 'gen', 'tier', 'seed',
+    'rule', 'c', 'clearpoke\n', 'teampreview', 'start',
+]
 #turns a line into a series of tokens that can be added to an infoset
-def tokenize(line):
+#takes the player to normalize between p1 and p2
+def tokenize(line, player):
     if not line.startswith('|'):
         return []
 
+    #split by '|', ':', ',', and '/'
+    line = line.replace(':', '|').replace(',', '|').replace('/', '|')
     tokens = line.split('|')
-    #TODO get a list of useless prefixes to filter out
-    if tokens[1] in []:
+
+    #filter out useless lines
+    if tokens[1] in uselessPrefixes:
         return []
 
-    #TODO split by :
-    #and remove any nicknames
+    #make it so all players see things from p1's perspective
+    if player == 1:
+        tokens = [token.replace('p2', 'p3').replace('p1', 'p2').replace('p3', 'p1') for token in tokens]
+
+    #TODO remove any nicknames
+
     tokens.append('|')
-    return tokens
+
+    return [token.strip() for token in tokens[1:]]
 
 #returns a seed that can be converted directly to a string and sent to PS
 def getSeed():
@@ -72,7 +84,7 @@ class Game:
 
         #infosets are stored as a list of strings, which are basically tokens
         #individual events should have an end token at the end to separate them
-        self.infosets = [[],[]]
+        self.infosets = [['start', '|'], ['start', '|']]
 
         loop = asyncio.get_event_loop()
         self.winner = loop.create_future()
@@ -81,7 +93,8 @@ class Game:
         await self.sendCmd('>start {"formatid":"gen7' + self.psFormat + '"' + (',"seed":' + str(self.seed) if self.seed else '') + '}')
 
         for (seed, player, action) in self.history:
-            await self.sendCmd('>resetPRNG ' + seed)
+            if seed != None:
+                await self.sendCmd('>resetPRNG ' + seed)
             await self.sendCmd('>p' + str(player+1) + ' ' + action)
 
         asyncio.ensure_future(self.runInputLoop())
@@ -102,10 +115,11 @@ class Game:
                 print(line, end='', file=self.file)
 
             if line == '|split\n':
+                #private info
                 #p1 infoset
-                self.infosets[0] += tokenize(await getLine())
+                self.infosets[0] += tokenize(await getLine(), 0)
                 #p2 infoset
-                self.infosets[1] += tokenize(await getLine())
+                self.infosets[1] += tokenize(await getLine(), 1)
                 #spectator view, throw out 
                 await getLine()
                 #omniscient view, print if verbose
@@ -142,6 +156,10 @@ class Game:
                 await self.reqQueues[losePlayer].put({'win': False})
 
                 break
+            else:
+                #public info
+                self.infosets[0] += tokenize(line, 0)
+                self.infosets[1] += tokenize(line, 1)
 
 
 
@@ -168,11 +186,12 @@ class Game:
         return (self.curPlayer, self.curReq, self.curActions)
 
     #gets the infoset (i.e. visible history i.e. state) for the given player
-    async def getInfoset(self, player):
+    def getInfoset(self, player):
         return self.infosets[player]
 
     async def takeAction(self, player, req, action):
         self.waitingOnAction = False
+        self.infosets[player].append(action)
         if 'teambuilding' in req:
             cmd = '>player p' + str(player+1) + ' {"name":"' + self.names[player] + '", "avatar": "43", "team":"' + action + '"}'
             await self.sendCmd(cmd)
@@ -190,6 +209,11 @@ class Game:
         if(self.verbose):
             print(header + cmd, file=self.file)
         self.ps.stdin.write(bytes(header + cmd + '\n', 'UTF-8'))
+
+    async def resetSeed(self):
+        seed = getSeed()
+        await self.sendCmd('>resetPRNG ' + seed)
+        return seed
 
 
 
@@ -395,4 +419,3 @@ def prettyPrintMove(jointAction, req):
     actionString = ','.join(actionText)
 
     return actionString
-
