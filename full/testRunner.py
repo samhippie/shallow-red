@@ -4,7 +4,7 @@ import asyncio
 import random
 
 import full.game
-from deep.deepRunner import getPSProcess
+from full.runner import getPSProcess
 
 #this is for playing random games
 #no AI, but it's good for testing

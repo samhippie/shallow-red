@@ -122,13 +122,14 @@ class Dataset(torch.utils.data.Dataset):
         data, label, iter = sample
 
         #data = sample[0:-(self.outputSize + 1)]
-        data = torch.from_numpy(data).float()
+        #data is a python list
+        #data = torch.from_numpy(data)
 
         #label = sample[-(self.outputSize + 1):-1]
-        label = torch.from_numpy(label).float()
+        label = torch.from_numpy(label)
 
         #iter = sample[-1:]
-        iter = torch.from_numpy(iter).float()
+        iter = torch.from_numpy(iter)
 
         return data, label, iter
 

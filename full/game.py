@@ -102,9 +102,6 @@ class Game:
         #have to execute each player's history
         #is it necessary to copy here?
         h = [copy.copy(self.history[0]), copy.copy(self.history[1])]
-        print()
-        print('history', h)
-        print()
         while len(h[0]) or len(h[1]):
             #both players may have requests, but we might only have history for one
             if len(h[0]) and not len(h[1]):
@@ -115,12 +112,10 @@ class Game:
                 prefPlayer = None
 
             player, req, actions = await self.getTurn(prefPlayer)
-            print(player, 'for history, got', req)
             seed, action = h[player][0]
             del h[player][0]
             if seed != None:
                 await self.sendCmd('>resetPRNG ' + seed)
-            print('on resume')
             await self.takeAction(player, req, action)
 
 
@@ -134,7 +129,6 @@ class Game:
             return (await self.ps.stdout.readline()).decode('UTF-8')
 
         while True:
-            print('getting line')
             line = await getLine()
 
             if self.verbose:
@@ -187,7 +181,6 @@ class Game:
                 #public info
                 self.infosets[0] += tokenize(line, 0)
                 self.infosets[1] += tokenize(line, 1)
-        print('out of input loop')
 
     #returns whose turn it is
     async def getPlayer(self):

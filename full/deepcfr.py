@@ -88,6 +88,9 @@ class DeepCfrAgent:
         self.branchingLimit = branchingLimit
         self.depthLimit = depthLimit
 
+        #flag so if we never search, we don't bother training
+        self.needsTraining = False
+
         self.verbose = verbose
 
     async def search(self, ps, pid=0, limit=100, innerLoops=1, seed=None, history=[[],[]]):
@@ -103,6 +106,7 @@ class DeepCfrAgent:
 
             #for self.small games, this is necessary to get a decent number of samples
             for j in range(innerLoops):
+                self.needsTraining = True
                 game = Game(ps, format=self.format, seed=seed, history=history, verbose=self.verbose)
                 await game.startGame()
                 await self.cfrRecur(ps, game, seed, history, i)
@@ -110,15 +114,21 @@ class DeepCfrAgent:
             #save our adv data after each iteration
             #so the non-zero pid workers don't have data cached
             self.advModels[i % 2].clearSampleCache()
+            #go ahead and clear our strat caches as well
+            #just in case the program is exited
+            for j in range(2):
+                self.stratModels[j].clearSampleCache()
 
             #only need to train about once per iteration
             self.trainingBarrier.wait()
             if self.pid == 0:
-                self.advTrain(i % 2)
+                if self.needsTraining:
+                    self.advTrain(i % 2)
                 self.sharedDict['advNet' + str(i % 2)] = self.advModels[i % 2].net
             self.trainingBarrier.wait()
             #broadcast the new network back out
             self.advModels[i % 2].net = self.sharedDict['advNet' + str(i % 2)]
+            self.needsTraining = False
 
         #clear the sample caches so the master agent can train with our data
         for sm in self.stratModels:

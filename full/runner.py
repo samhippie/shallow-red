@@ -16,7 +16,6 @@ import torch.multiprocessing as mp
 import full.game
 from full.game import Game
 import full.deepcfr as deepcfr
-import full.testRunner
 
 #This file has functions relating to running the AI
 
@@ -35,7 +34,12 @@ async def playTestGame(limit=100,
 
         m = mp.Manager()
         writeLock = m.Lock()
-        trainingBarrier = m.Barrier(numProcesses)
+        if numProcesses > 0:
+            trainingBarrier = m.Barrier(numProcesses)
+        else:
+            #barrier with 0 doesn't work
+            trainingBarrier = m.Barrier(1)
+
         sharedDict = m.dict()
 
         agent = deepcfr.DeepCfrAgent(
@@ -48,7 +52,7 @@ async def playTestGame(limit=100,
                 writeLock=writeLock,
                 trainingBarrier=trainingBarrier,
                 sharedDict=sharedDict,
-                verbose=True)
+                verbose=False)
 
         #moves with probabilites below this are not considered
         probCutoff = 0.03
@@ -126,9 +130,9 @@ async def playTestGame(limit=100,
                         normProbs = [1 / len(actions) for a in actions]
 
                     for j in range(len(actions)):
-                        actionString = Game.prettyPrintMove(actions[j], request[1])
+                        actionString = full.game.prettyPrintMove(actions[j], req)
                         if normProbs[j] > 0:
-                            print('|c|' + cmdHeaders[num] + '|Turn ' + str(i) + ' action:', actionString,
+                            print('|c|p' + str(player+1) + '|Turn ' + str(i) + ' action:', actionString,
                                     'prob:', '%.1f%%' % (normProbs[j] * 100), file=file)
 
                     action = np.random.choice(actions, p=normProbs)
@@ -146,7 +150,7 @@ async def playTestGame(limit=100,
                 random.random() * 0x10000,
                 random.random() * 0x10000,
             ]
-            game = Game(mainPs, format=format, teams=teams, seed=seed, history=history, verbose=True, file=file)
+            game = Game(mainPs, format=format, seed=seed, history=history, verbose=True, file=file)
             await game.startGame()
             gameTask = asyncio.ensure_future(play(game))
             winner = await game.winner
