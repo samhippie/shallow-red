@@ -135,7 +135,6 @@ class Net(nn.Module):
         #restore original order in batch
         lstmOutput = lstmOutput[sort_idx.sort(0)[1]]
 
-        #print('lstm output', ht)
         #lstmOutput = lstmOutput[0].view(-1)
         x = F.relu(self.fc1(lstmOutput))
         x = F.relu(self.fc2(x))
@@ -145,7 +144,7 @@ class Net(nn.Module):
         #like in the paper
         #x = self.normalizer(x)
         if self.softmax:
-            x = F.softmax(x, dim=0)
+            x = F.softmax(x, dim=1)
 
         if isSingle:
             return x[0]

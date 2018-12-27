@@ -27,6 +27,7 @@ async def playTestGame(limit=100,
         format='1v1', seed=None, history=[[],[]],
         numProcesses=1, advEpochs=100, stratEpochs=1000, 
         branchingLimit=2, depthLimit=None, resumeIter=None,
+        innerLoops=1,
         file=sys.stdout):
     try:
         if not seed:
@@ -65,6 +66,7 @@ async def playTestGame(limit=100,
                     ps=ps,
                     pid=0,
                     limit=limit,
+                    innerLoops=innerLoops,
                     seed=seed,
                     history=history)
             finally:
@@ -82,6 +84,7 @@ async def playTestGame(limit=100,
                             ps=ps,
                             pid=j,
                             limit=limit,
+                            innerLoops=innerLoops,
                             seed=seed,
                             history=history)
                     finally:
