@@ -2,9 +2,9 @@
 
 import io
 import numpy as np
-import psycopg2
+#import psycopg2
 import sys
-import sqlite3
+#import sqlite3
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -16,7 +16,7 @@ import modelInput
 import deep.dataStorage
 
 #this could go in a config file or something
-dbConnect = "dbname='shallow-red' user='shallow-red' host='localhost' password='shallow-red'"
+#dbConnect = "dbname='shallow-red' user='shallow-red' host='localhost' password='shallow-red'"
 
 
 #model of the network
@@ -52,7 +52,7 @@ class Net(nn.Module):
         #like in the paper
         #x = self.normalizer(x)
         if self.softmax:
-            x = F.softmax(self.fc6(x), dim=0)
+            x = F.softmax(self.fc6(x), dim=1)
         else:
             x = self.fc6(x)
         return x
@@ -118,8 +118,10 @@ class DeepCfrModel:
 
     def predict(self, state):
         data = modelInput.stateToTensor(state)
-        data = torch.from_numpy(data).float()
-        return self.net(data).detach().numpy()
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        data = torch.from_numpy(data).float().to(device)
+        self.net.to(device)
+        return self.net(data).cpu().detach().numpy()
 
     def train(self, epochs=100):
         #I'm doing this so we can manually resume a stopped run

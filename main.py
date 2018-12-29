@@ -19,7 +19,7 @@ async def main():
     #format='singles'
     #format='vgc'
 
-    await full.runner.playTestGame(format=format, limit=50, numProcesses=16, advEpochs=1000, stratEpochs=10000, branchingLimit=3, depthLimit=5, innerLoops=5, resumeIter=None)
+    await full.runner.playTestGame(format=format, limit=200, numProcesses=8, advEpochs=3000, stratEpochs=100000, branchingLimit=3, depthLimit=10, innerLoops=20, resumeIter=None)
 
 if __name__ == '__main__':
     loop = asyncio.get_event_loop()

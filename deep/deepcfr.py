@@ -112,7 +112,7 @@ class DeepCfrAgent:
                 print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
 
             #for self.small games, this is necessary to get a decent number of samples
-            for j in range(1):
+            for j in range(10):
                 #need idMap to be the same across processes
                 if self.pid == 0:
                     self.sharedDict['idMap'] = modelInput.idMap

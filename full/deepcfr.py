@@ -72,10 +72,13 @@ class DeepCfrAgent:
             full.dataStorage.clearData()
             
 
+        #if the adv models are passed in, assume we aren't responsible for sharing them
         if advModels:
             self.advModels = advModels
+            self.manageSharedModels = False
         else:
             self.advModels = [full.model.DeepCfrModel(name='adv' + str(i), softmax=False, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
+            self.manageSharedModels = True
 
         if stratModels:
             self.stratModels = stratModels
@@ -124,10 +127,12 @@ class DeepCfrAgent:
             if self.pid == 0:
                 if self.needsTraining:
                     self.advTrain(i % 2)
-                self.sharedDict['advNet' + str(i % 2)] = self.advModels[i % 2].net
+                if self.manageSharedModels:
+                    self.sharedDict['advNet' + str(i % 2)] = self.advModels[i % 2].net
             self.trainingBarrier.wait()
             #broadcast the new network back out
-            self.advModels[i % 2].net = self.sharedDict['advNet' + str(i % 2)]
+            if self.manageSharedModels:
+                self.advModels[i % 2].net = self.sharedDict['advNet' + str(i % 2)]
             self.needsTraining = False
 
         #clear the sample caches so the master agent can train with our data

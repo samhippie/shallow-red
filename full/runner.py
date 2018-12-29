@@ -16,6 +16,7 @@ import torch.multiprocessing as mp
 import full.game
 from full.game import Game
 import full.deepcfr as deepcfr
+import full.model
 
 #This file has functions relating to running the AI
 
@@ -43,6 +44,13 @@ async def playTestGame(limit=100,
 
         sharedDict = m.dict()
 
+        advModels = [full.model.DeepCfrModel(name='adv' + str(i), softmax=False, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
+        stratModels = [full.model.DeepCfrModel(name='strat' + str(i), softmax=True, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
+
+        for i in range(2):
+            advModels[i].shareMemory()
+            stratModels[i].shareMemory()
+
         agent = deepcfr.DeepCfrAgent(
                 format,
                 advEpochs=advEpochs,
@@ -53,6 +61,8 @@ async def playTestGame(limit=100,
                 writeLock=writeLock,
                 trainingBarrier=trainingBarrier,
                 sharedDict=sharedDict,
+                advModels=advModels,
+                stratModels=stratModels,
                 verbose=False)
 
         #moves with probabilites below this are not considered

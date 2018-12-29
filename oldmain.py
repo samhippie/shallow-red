@@ -89,7 +89,7 @@ async def main():
 
     #teams = (singlesTeams[0], singlesTeams[1])
     #gen 1 starters mirror
-    #teams = (ovoTeams[4], ovoTeams[4])
+    teams = (ovoTeams[4], ovoTeams[4])
 
     #groudon vs lunala vgv19
     #teams = (tvtTeams[3], tvtTeams[4])
@@ -108,7 +108,7 @@ async def main():
 
     #initMoves = ([' team 12'], [' team 12'])
     #initMoves = ([' team 1'], [' team 1'])
-    #initMoves = ([], [])
+    initMoves = ([], [])
 
     #teams = (ovoTeams[5], ovoTeams[5])
     #initMoves = ([' team 2'], [' team 2'])
@@ -117,11 +117,9 @@ async def main():
 
     #await parallelRunner.playTestGame(teams, format=format, limit=1000, numProcesses=16, initMoves=initMoves, algo='rm')
 
-    await full.runner.playTestGame(format=format, limit=10, numProcesses=0, advEpochs=1000, stratEpochs=1000, branchingLimit=2, depthLimit=5, resumeIter=None)
+    #await full.runner.playTestGame(format=format, limit=10, numProcesses=0, advEpochs=1000, stratEpochs=1000, branchingLimit=2, depthLimit=5, resumeIter=None)
 
-    return
-
-    await deepRunner.playTestGame(teams, format=format, limit=50, numProcesses=16, advEpochs=2000, stratEpochs=20000, branchingLimit=1, depthLimit=5, initMoves=initMoves, resumeIter=None)
+    await deepRunner.playTestGame(teams, format=format, limit=50, numProcesses=8, advEpochs=2000, stratEpochs=20000, branchingLimit=3, depthLimit=5, initMoves=initMoves, resumeIter=None)
 
     return
 

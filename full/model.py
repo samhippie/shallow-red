@@ -14,58 +14,63 @@ from torchvision import transforms
 import full.dataStorage
 import full.game
 
-#I'm getting cudnn errors if I leave it enabled
-#but it works without
-#torch.backends.cudnn.enabled=False
+#how many bits are used to represent numbers in tokens
+NUM_TOKEN_BITS = 9
 
 #TODO
 #I'm going to try disabling the way numbers are handled until batching and cuda both work
 #once we have those working, find a good way of representing numbers
 
-def numToBinary(num):
-    n = num % 1024
+def numToBinary(n):
+    ceiling = 1 << NUM_TOKEN_BITS
+    if n >= ceiling:
+        n = ceiling - 1
     b = []
     while n > 0:
         b.append(n & 1)
         n >>= 1
-    b += [0] * (10 - len(b))
+    b += [0] * (NUM_TOKEN_BITS - len(b))
     return np.array(b)
+
+#used to map each token in an infoset into an int representation
+#the first number is used for embedding, and the other numbers are for binary numbers
+numberMap = {}
+def tokenToTensor(x):
+    if not numberMap:
+        for i in range(1 << NUM_TOKEN_BITS):
+            numberMap[str(i)] = numToBinary(i)
+
+    if x in numberMap:
+        return [0, *numberMap[x]]
+    else:
+        return [hash(x), *numberMap['0']]
 
 #formats the infoset so it can be processed by the network
 #this is how infosets should be stored
-numberMap = {}
-
-def myHash(x, axis):
-    return hash(x)
-vecHash = np.vectorize(myHash)
 def infosetToTensor(infoset):
     if type(infoset[0]) == list:
-        return [[hash(token) for token in seq] for seq in infoset]
-    return [hash(token) for token in infoset]
-    #if not numberMap:
-        #for i in range(1024):
-            #numberMap[str(i)] = numToBinary(i)
-    #t = np.stack([np.concatenate([[1], numberMap[token]]) if token in numberMap else np.concatenate([[0, hash(token)], np.zeros(9, dtype=np.long)]) for token in infoset])
-    #return t
-    #return np.apply_over_axes(vecHash, np.array(infoset), (1,))
+        return [[tokenToTensor(token) for token in seq] for seq in infoset]
+    return [tokenToTensor(token) for token in infoset]
 
 #model of the network
 class Net(nn.Module):
-    def __init__(self, embedSize=30, lstmSize=100, width=100, softmax=False):
+    #embed size is how large our embedding output is
+    #lstmSize is the size of the lstm hidden output
+    #width is the size of the feedforward layers
+    #softmax is whether we softmax the final output
+    def __init__(self, embedSize=16, lstmSize=256, width=1024, softmax=False):
         super(Net, self).__init__()
 
         self.outputSize = full.game.numActions
 
         self.softmax = softmax
         self.embedSize = embedSize
-        #used for appending number representation to the embedding
-        numSize = 0
 
         #turn vocab indices from history into embedding vectors
         #self.embeddings = nn.Embedding(self.vocabSize, embedSize)
         self.embeddings = HashEmbedding(10000, embedSize, append_weight=False)
         #LSTM to process infoset via the embeddings
-        self.lstm = nn.LSTM(embedSize + numSize, lstmSize)
+        self.lstm = nn.LSTM(embedSize + NUM_TOKEN_BITS, lstmSize)
 
         #simple feed forward for final part
         self.fc1 = nn.Linear(lstmSize, width)
@@ -78,27 +83,26 @@ class Net(nn.Module):
         #self.normalizer = nn.LayerNorm((width,))
 
     def forward(self, infoset, device=None):
-        #convert infoset into token_repr | int_repr
-        #so we can handle both tokens and numbers in the same input
-        #lstmInput = []
-        #for token in infoset:
-            #if token[0] == 1: #number input
-                #val = torch.cat([torch.zeros(self.embedSize), token[1:].float()])
-            #else:
-                #val = torch.cat([self.embeddings(token[1].view(1, -1)).view(-1), torch.zeros(10)])
-            #lstmInput.append(val)
-        #lstmInput = torch.stack(lstmInput)
+        #about the infoset input
+        #it should be a batch, which is a set of sequences
+        #and a sequence is a series of tokens
+        #and each token is a [hash, bit, bit, ...]
+        #batch -> sequence -> token -> hash and bits
 
-        #make it BxLxD if it's just LxD
+
+        #all the commented out stuff is staying because I'm not sure everything is lined up correctly
+        #after all the transposing and sorting and whatever else to make the lstm happy
+
+        #make it a batch of 1 in case it's just a single
         isSingle = False
-        if type(infoset[0]) == int:
+        if type(infoset[0][0]) == int:
             isSingle = True
             infoset = [infoset]
 
         lengths = torch.LongTensor([len(seq) for seq in infoset])
         if device:
             lengths = lengths.to(device)
-        seq_tensor = torch.zeros((len(infoset), lengths.max())).long()
+        seq_tensor = torch.zeros((len(infoset), lengths.max(), NUM_TOKEN_BITS + 1)).long()
         if device:
             seq_tensor = seq_tensor.to(device)
             for idx, (seq, seqlen) in enumerate(zip(infoset, lengths)):
@@ -115,11 +119,18 @@ class Net(nn.Module):
         #infoset = infoset.transpose(0, 1)
 
         seq_tensor = torch.transpose(seq_tensor, 0, 1)
-        embedded = self.embeddings(seq_tensor)
+        #keep the batches and sequence, but only pick the first element of the token i.e. the hash
+        embedded = self.embeddings(seq_tensor[:, :, 0])
+        #replace the hash with the embedded vector
+        embedded = torch.cat((embedded, seq_tensor[:, :, 1:].float()), 2)
+
+
         #LSTM expects a shape of (L, B, D)
         #embedded = torch.transpose(embedded, 0, 1)
 
         packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, lengths)
+        del lengths
+        del seq_tensor
 
         #_, lstmOutput = self.lstm(lstmInput.view(len(infoset), 1, -1), self.hidden)
         #_, (ht, ct) = self.lstm(packed, self.hidden)
@@ -151,12 +162,6 @@ class Net(nn.Module):
         else:
             return x
 
-    #pytorch doesn't know to move the LSTM default hidden input
-    #I don't really like having a side effect in this sort of function but whatever
-    #def moveToDevice(self, device):
-        #self.hidden = tuple(h.to(device) for h in self.hidden)
-        #return self.to(device)
-
 class DeepCfrModel:
 
     #for advantages, the input is the state vector
@@ -168,7 +173,7 @@ class DeepCfrModel:
     #are almost the same (modelInput.numActions)
     #strategy is softmaxed, advantage is not
 
-    def __init__(self, name, softmax, writeLock, sharedDict, lr=0.0001, sampleCacheSize=1000, clearDb=True):
+    def __init__(self, name, softmax, writeLock, sharedDict, lr=0.001, sampleCacheSize=1000):
         self.softmax = softmax
         self.lr = lr
         self.writeLock = writeLock
@@ -185,6 +190,9 @@ class DeepCfrModel:
         self.sampleCache = []
 
         self.name = name
+
+    def shareMemory(self):
+        self.net.share_memory()
 
     def addSample(self, infoset, label, iter):
         #infosetTensor = np.array([hash(token) for token in infoset], dtype=np.long)
@@ -215,10 +223,10 @@ class DeepCfrModel:
         self.clearSampleCache()
 
     def predict(self, infoset):
-        #data = np.array([hash(token) for token in infoset], dtype=np.long)
         data = infosetToTensor(infoset)
-        #data = torch.from_numpy(data).long()
-        return self.net(data).detach().numpy()
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        self.net.to(device)
+        return self.net(data, device).cpu().detach().numpy()
 
     def train(self, epochs=100):
         #move from write cache to db
@@ -232,7 +240,7 @@ class DeepCfrModel:
         #self.net = self.net.moveToDevice(device)
         #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
         self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
-        miniBatchSize = 4
+        miniBatchSize = 32
 
         #data needs to be a python list of python lists due to variable lengths
         #everything else can be a proper tensor
@@ -243,7 +251,7 @@ class DeepCfrModel:
             return data, labels, iters
 
         dataset = full.dataStorage.Dataset(self.name, self.sharedDict, self.outputSize)
-        loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=True, num_workers=4, pin_memory=False, collate_fn=my_collate)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=True, num_workers=4, pin_memory=True, collate_fn=my_collate)
 
         print('dataset size:', dataset.size, file=sys.stderr)
 
@@ -256,12 +264,8 @@ class DeepCfrModel:
                 batchIter = iter(loader)
                 data, labels, iters = next(batchIter)
 
-            labels = labels.float()
-            iters = iters.float()
-            #print('moving data to device', file=sys.stderr)
-            #data = data.to(device)
-            labels = labels.to(device)
-            iters = iters.to(device)
+            labels = labels.float().to(device)
+            iters = iters.float().to(device)
 
             #print('getting ys', file=sys.stderr)
             #evaluate on network
@@ -285,27 +289,32 @@ class DeepCfrModel:
             self.optimizer.step()
             #print('done with step', file=sys.stderr)
 
-        self.net = self.net.to(torch.device('cpu'))
-        #self.net = self.net.moveToDevice(torch.device('cpu'))
+            #cleaning up might improve memory usage
+            del loss
+            del ys
+
+        #self.net = self.net.to(torch.device('cpu'))
 
 def netTest():
     net = Net()
+    list1 = infosetToTensor(['a', 'b', 'c'])
+    list2 = infosetToTensor(['d', 'e', 'f'])
+    list3 = infosetToTensor(['g', 'h'])
     #simple test
-    out1 = net.forward([1,2,3])
-    out2 = net.forward([4,5,6])
+    out1 = net.forward(list1)
+    out2 = net.forward(list2)
     print('simple1', out1)
     print('simple2', out2)
     #batch test
     out = net.forward([
-        [1,2,3],
-        [4,5,6],
-        [7,8,9],
+        list1,
+        list2,
     ])
     print('batch', out)
     #multi length batch test
     out = net.forward([
-        [4,5],
-        [1,2,3],
-        [4,5],
+        list3,
+        list1,
+        list3,
     ])
     print('multi length batch', out)

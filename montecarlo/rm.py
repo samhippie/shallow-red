@@ -6,7 +6,7 @@ import copy
 import math
 import numpy as np
 import random
-from sqlitedict import SqliteDict
+#from sqlitedict import SqliteDict
 import sys
 
 from game import Game
