@@ -138,9 +138,9 @@ class Game:
             return (self._winner, {'win': winnings}, [])
 
         if self.state in [_Game.P1_DEAL, _Game.P1_RAISE]:
-            player = 0
+            player = (self.dealer + 1) % 2
         else:
-            player = 1
+            player = self.dealer
 
         actions = _Game.actionDict[self.state]
 
