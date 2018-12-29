@@ -186,8 +186,8 @@ class DeepCfrAgent:
             if not rollout:
                 self.updateProbs(offPlayer, infoset, actions, probs, iter // 2 + 1)
 
-            if depth == 0 and self.pid == 0:
-                print('player ' + str(player) + ' probs', list(zip(actions, probs)), file=sys.stderr)
+            #if depth == 0 and self.pid == 0:
+                #print('player ' + str(player) + ' probs', list(zip(actions, probs)), file=sys.stderr)
             await game.takeAction(player, req, action)
 
             if player == 0:
@@ -200,8 +200,8 @@ class DeepCfrAgent:
         elif player == onPlayer:
             #get probs, which action we take depends on the configuration
             probs = self.regretMatch(onPlayer, infoset, actions, depth)
-            if depth == 0 and self.pid == 0:
-                print('player ' + str(onPlayer) + ' probs', list(zip(actions, probs)), file=sys.stderr)
+            #if depth == 0 and self.pid == 0:
+                #print('player ' + str(onPlayer) + ' probs', list(zip(actions, probs)), file=sys.stderr)
             if rollout:
                 #we pick one action according to the current strategy
                 actions = [np.random.choice(actions, p=probs)]
@@ -261,10 +261,10 @@ class DeepCfrAgent:
                 am = self.advModels[onPlayer]
                 am.addSample(infoset, zip(actions, advantages), iter // 2 + 1)
 
-                if depth == 0 and self.pid == 0:
-                    print('player', str(onPlayer), file=sys.stderr)
-                    print('stateExpValue', stateExpValue, 'from', list(zip(probs, rewards)), file=sys.stderr)
-                    print('advantages', list(zip(actions, advantages)), file=sys.stderr)
+                #if depth == 0 and self.pid == 0:
+                    #print('player', str(onPlayer), file=sys.stderr)
+                    #print('stateExpValue', stateExpValue, 'from', list(zip(probs, rewards)), file=sys.stderr)
+                    #print('advantages', list(zip(actions, advantages)), file=sys.stderr)
 
                 return stateExpValue
             else:
@@ -282,8 +282,8 @@ class DeepCfrAgent:
         probs = []
         for n in actionNums:
             probs.append(max(0, advs[n]))
-        if depth == 0 and self.pid == 0:
-            print('predicted advantages', [(action, advs[n]) for action, n in zip(actions, actionNums)], file=sys.stderr)
+        #if depth == 0 and self.pid == 0:
+            #print('predicted advantages', [(action, advs[n]) for action, n in zip(actions, actionNums)], file=sys.stderr)
         probs = np.array(probs)
         pSum = np.sum(probs)
         if pSum > 0:
