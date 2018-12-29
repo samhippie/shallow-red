@@ -9,6 +9,23 @@ import sys
 
 from full.action import actionMap
 
+#location of the modified ps executable
+PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
+PS_ARG = 'simulate-battle'
+
+class _Context:
+    async def __aenter__(self):
+        self.ps = await asyncio.create_subprocess_exec(PS_PATH, PS_ARG,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE)
+
+    async def __aexit(self, *args):
+        self.ps.terminate()
+
+#our context is a pokemon showdown process
+def getContext():
+    return _Context()
+
 numActions = len(actionMap)
 
 uselessPrefixes = [
@@ -58,8 +75,8 @@ class Game:
 
     #new constructor for the more generic game implementation
     #history is now a set of (seed, action) tuples for each player
-    def __init__(self, ps, format, seed=None, names=['bot1', 'bot2'], history=[[],[]], verbose=False, file=sys.stdout):
-        self.ps = ps
+    def __init__(self, context, format, seed=None, names=['bot1', 'bot2'], history=[[],[]], verbose=False, file=sys.stdout):
+        self.ps = context 
         self.format = format
         self.seed = seed
         self.names = names
@@ -166,15 +183,15 @@ class Game:
             elif line.startswith('|win'):
                 winner = line[5:-1]
                 self.winner.set_result(winner)
-                if winner == 'bot1':
+                if winner == self.names[0]:
                     winPlayer = 0
                     losePlayer = 1
                 else:
                     winPlayer = 1
                     losePlayer = 0
 
-                await self.reqQueues[winPlayer].put({'win': True})
-                await self.reqQueues[losePlayer].put({'win': False})
+                await self.reqQueues[winPlayer].put({'win': 1})
+                await self.reqQueues[losePlayer].put({'win': -1})
 
                 break
             else:

@@ -8,10 +8,9 @@ import numpy as np
 import random
 import sys
 
-import full.game
-from full.game import Game
-import full.model
-import full.dataStorage
+import config
+import model
+import dataStorage
 
 #Deep MCCFR
 
@@ -44,32 +43,22 @@ class DeepCfrAgent:
     #instead of multiple training cycles like the others
     def __init__(
             self,
-            format,
             writeLock,
             trainingBarrier,
             sharedDict,
             advModels=None, stratModels=None,
-            advEpochs=1000,
-            stratEpochs=10000,
-            branchingLimit=None,
-            depthLimit=None,
-            resumeIter=None,
             verbose=False):
 
-        self.format = format
-
         self.pid = -1
-
-        self.resumeIter = resumeIter
 
 
         self.writeLock = writeLock
         self.trainingBarrier = trainingBarrier
         self.sharedDict = sharedDict
 
-        if resumeIter == None:
+        if config.resumeIter == None:
             #fresh start, delete old data
-            full.dataStorage.clearData()
+            dataStorage.clearData()
             
 
         #if the adv models are passed in, assume we aren't responsible for sharing them
@@ -85,21 +74,15 @@ class DeepCfrAgent:
         else:
             self.stratModels = [full.model.DeepCfrModel(name='strat' + str(i), softmax=True, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
 
-        self.advEpochs = advEpochs
-        self.stratEpochs = stratEpochs
-
-        self.branchingLimit = branchingLimit
-        self.depthLimit = depthLimit
-
         #flag so if we never search, we don't bother training
         self.needsTraining = False
 
         self.verbose = verbose
 
-    async def search(self, ps, pid=0, limit=100, innerLoops=1, seed=None, history=[[],[]]):
+    async def search(self, context, pid=0, limit=100, innerLoops=1, seed=None, history=[[],[]]):
         self.pid = pid
 
-        start = self.resumeIter if self.resumeIter else 0
+        start = config.resumeIter if config.resumeIter else 0
 
         if self.pid == 0:
             print(end='', file=sys.stderr)
@@ -110,9 +93,14 @@ class DeepCfrAgent:
             #for self.small games, this is necessary to get a decent number of samples
             for j in range(innerLoops):
                 self.needsTraining = True
-                game = Game(ps, format=self.format, seed=seed, history=history, verbose=self.verbose)
+                #we want each game tree traversal to use the same seed
+                if seed:
+                    curSeed = seed
+                else:
+                    curSeed = config.game.getSeed()
+                game = config.game.Game(context=context, seed=curSeed, history=history, verbose=self.verbose)
                 await game.startGame()
-                await self.cfrRecur(ps, game, seed, history, i)
+                await self.cfrRecur(context, game, curSeed, history, i)
 
             #save our adv data after each iteration
             #so the non-zero pid workers don't have data cached
@@ -146,19 +134,19 @@ class DeepCfrAgent:
 
     def advTrain(self, player):
         model = self.advModels[player]
-        model.train(epochs=self.advEpochs)
+        model.train(epochs=config.advEpochs)
 
     def stratTrain(self):
         if self.pid == 0:
             print('training strategy', file=sys.stderr)
         #we train both strat models at once
         for model in self.stratModels:
-            model.train(epochs=self.stratEpochs)
+            model.train(epochs=config.stratEpochs)
 
     def getProbs(self, player, infoset, actions):
         sm = self.stratModels[player]
         stratProbs = sm.predict(infoset)
-        actionNums = [full.game.enumAction(a) for a in actions]
+        actionNums = [config.game.enumAction(a) for a in actions]
         probs = []
         for n in actionNums:
             probs.append(stratProbs[n])
@@ -170,16 +158,11 @@ class DeepCfrAgent:
         else:
             return np.array([1 / len(actions) for a in actions])
 
-    #closes the models, which have data to clean up
-    def close(self):
-        for model in self.advModels + self.stratModels:
-            model.close()
-
     #recursive implementation of cfr
     #history is a list of (seed, player, action) tuples
     #assumes the game has already had the history applied
-    async def cfrRecur(self, ps, game, startSeed, history, iter, depth=0, rollout=False):
-        if depth > self.depthLimit:
+    async def cfrRecur(self, context, game, startSeed, history, iter, depth=0, rollout=False):
+        if config.depthLimit and depth > config.depthLimit:
             rollout = True
 
         onPlayer = iter % 2
@@ -188,10 +171,10 @@ class DeepCfrAgent:
         player, req, actions = await game.getTurn()
 
         if 'win' in req:
-            if req['win'] and player == onPlayer:
-                return 1
+            if player == onPlayer:
+                return req['win']
             else:
-                return -1
+                return -1 * req['win']
 
         infoset = game.getInfoset(player)
 
@@ -212,7 +195,7 @@ class DeepCfrAgent:
             else:
                 newHistory = [history[0], history[1] + [(None, action)]]
 
-            return await self.cfrRecur(ps, game, startSeed, newHistory, iter, depth, rollout)
+            return await self.cfrRecur(context, game, startSeed, newHistory, iter, depth, rollout)
 
         elif player == onPlayer:
             #get probs, which action we take depends on the configuration
@@ -223,12 +206,12 @@ class DeepCfrAgent:
                 #we pick one action according to the current strategy
                 actions = [np.random.choice(actions, p=probs)]
                 actionIndices = [0]
-            elif self.branchingLimit:
+            elif config.branchingLimit:
                 #select a set of actions to pick
                 #chance to play randomly instead of picking the best actions
                 exploreProbs = probs# * (0.9) + 0.1 / len(probs)
                 #there might be some duplicates but it shouldn't matter
-                actionIndices = np.random.choice(len(actions), self.branchingLimit, p=exploreProbs)
+                actionIndices = np.random.choice(len(actions), config.branchingLimit, p=exploreProbs)
             else:
                 #we're picking every action
                 actionIndices = list(range(len(actions)))
@@ -248,7 +231,7 @@ class DeepCfrAgent:
 
                 #don't have to re-init game for the first action
                 if gameUsed:
-                    game = Game(ps, format=self.format, seed=startSeed, history=history, verbose=self.verbose)
+                    game = config.game.Game(context, seed=startSeed, history=history, verbose=self.verbose)
                     await game.startGame()
                     await game.getTurn()
                 else:
@@ -265,7 +248,7 @@ class DeepCfrAgent:
                 else:
                     newHistory = [history[0], history[1] + [(None, action)]]
 
-                r = await self.cfrRecur(ps, game, startSeed, newHistory, iter, depth=depth+1, rollout=curRollout)
+                r = await self.cfrRecur(context, game, startSeed, newHistory, iter, depth=depth+1, rollout=curRollout)
                 rewards.append(r)
 
             if not rollout:
@@ -295,7 +278,7 @@ class DeepCfrAgent:
     def regretMatch(self, player, infoset, actions, depth):
         am = self.advModels[player]
         advs = am.predict(infoset)
-        actionNums = [full.game.enumAction(a) for a in actions]
+        actionNums = [config.game.enumAction(a) for a in actions]
         probs = []
         for n in actionNums:
             probs.append(max(0, advs[n]))

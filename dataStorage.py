@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 
 import asyncio
-import modelInput
 import numpy as np
 import os
 import os.path
@@ -11,18 +10,20 @@ import torch
 import torch.utils.data
 import torch.multiprocessing as mp
 
+import config
+
 #this manages the training data for deep cfr
 
 #directory where samples are stored
-DATA_DIR = '/home/sam/data/'
+DATA_DIR = config.dataDir
 #DATA_DIR = './data/'
 
 #whether to store data in memory or on disk
-IN_MEMORY = False
+IN_MEMORY = config.inMemory
 
 #whether to cache each sample in-memory on read
 #this only has an effect when IN_MEMORY is False
-BIG_CACHE = False
+BIG_CACHE = config.bigCache
 
 #deletes the data from DATA_DIR
 #does not delete the folder itself
