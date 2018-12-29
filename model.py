@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+from apex import amp
 from hashembed.embedding import HashEmbedding
 import io
 import numpy as np
@@ -13,6 +14,8 @@ from torchvision import transforms
 
 import dataStorage
 import config
+
+amp_handle = amp.init()
 
 #how many bits are used to represent numbers in tokens
 NUM_TOKEN_BITS = config.numTokenBits
@@ -179,6 +182,7 @@ class DeepCfrModel:
         self.outputSize = config.game.numActions
 
         self.net = Net(softmax=softmax)
+        self.net.float()
         self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
         #self.optimizer = optim.SGD(self.net.parameters(), lr=lr, momentum=0.9)
 
@@ -234,11 +238,12 @@ class DeepCfrModel:
         #device = torch.device('cpu')
 
         self.net = Net(softmax=self.softmax)
+        self.net.float()
         self.net = self.net.to(device)
         #self.net = self.net.moveToDevice(device)
         #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
         self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
-        miniBatchSize = 32
+        miniBatchSize = 4
 
         #data needs to be a python list of python lists due to variable lengths
         #everything else can be a proper tensor
@@ -278,7 +283,9 @@ class DeepCfrModel:
                 print(i, loss, file=sys.stderr)
             #get gradient of loss
             #print('backward', file=sys.stderr)
-            loss.backward()
+            #use amp because nvidia said so
+            with amp_handle.scale_loss(loss, self.optimizer) as scaled_loss:
+                scaled_loss.backward()
             #clip gradient norm, which was done in the paper
             #print('clip', file=sys.stderr)
             nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
