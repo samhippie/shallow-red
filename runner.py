@@ -63,7 +63,6 @@ async def trainAndPlay(file=sys.stdout):
     processes = []
     for j in range(config.numProcesses):
         def run():
-            print('running', j)
             async def asyncRun():
                 async with config.game.getContext() as context:
                     await agent.search(
