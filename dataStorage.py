@@ -124,6 +124,7 @@ class Dataset(torch.utils.data.Dataset):
 
         #data = sample[0:-(self.outputSize + 1)]
         #data is a python list
+        #(except when it isn't)
         #data = torch.from_numpy(data)
 
         #label = sample[-(self.outputSize + 1):-1]

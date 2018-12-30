@@ -37,23 +37,25 @@ if gameName == 'warPoker':
 
     #search
     numProcesses = 8
-    limit = 100
+    limit = 50
     seed = None
     resumeIter = None
-    innerLoops = 50
+    innerLoops = 200
     branchingLimit = None
     depthLimit = None
 
     #training
     advEpochs = 1000
     stratEpochs = 10000
+    miniBatchSize = 4
+    numWorkers = 16
 
     #model
     numTokenBits = 5
-    embedSize = 8
-    lstmSize = 16
-    width = 16
-    learnRate = 0.001
+    embedSize = 10
+    lstmSize = 1024
+    width = 256
+    learnRate = 0.0001
     sampleCacheSize = 1000
 
 

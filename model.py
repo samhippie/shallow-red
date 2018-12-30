@@ -6,6 +6,7 @@ import io
 import numpy as np
 import sys
 import torch
+import torch.multiprocessing
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -14,6 +15,9 @@ from torchvision import transforms
 
 import dataStorage
 import config
+
+#this should stop some errors about too many files being open
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 amp_handle = amp.init()
 
@@ -29,7 +33,7 @@ def numToBinary(n):
         b.append(n & 1)
         n >>= 1
     b += [0] * (NUM_TOKEN_BITS - len(b))
-    return np.array(b)
+    return torch.tensor(b)
 
 #used to map each token in an infoset into an int representation
 #the first number is used for embedding, and the other numbers are for binary numbers
@@ -40,16 +44,16 @@ def tokenToTensor(x):
             numberMap[str(i)] = numToBinary(i)
 
     if x in numberMap:
-        return [0, *numberMap[x]]
+        return torch.tensor([0, *numberMap[x]])
     else:
-        return [hash(x), *numberMap['0']]
+        return torch.tensor([hash(x), *numberMap['0']])
 
 #formats the infoset so it can be processed by the network
 #this is how infosets should be stored
 def infosetToTensor(infoset):
     if type(infoset[0]) == list:
-        return [[tokenToTensor(token) for token in seq] for seq in infoset]
-    return [tokenToTensor(token) for token in infoset]
+        return [torch.stack([tokenToTensor(token) for token in seq]) for seq in infoset]
+    return torch.stack([tokenToTensor(token) for token in infoset])
 
 #model of the network
 class Net(nn.Module):
@@ -67,14 +71,14 @@ class Net(nn.Module):
 
         #turn vocab indices from history into embedding vectors
         #self.embeddings = nn.Embedding(self.vocabSize, embedSize)
-        self.embeddings = HashEmbedding(10000, self.embedSize, append_weight=False)
+        self.embeddings = HashEmbedding(1000, self.embedSize, append_weight=False)
         #LSTM to process infoset via the embeddings
         self.lstm = nn.LSTM(self.embedSize + NUM_TOKEN_BITS, config.lstmSize)
 
         #simple feed forward for final part
         self.fc1 = nn.Linear(config.lstmSize, config.width)
-        self.fc2 = nn.Linear(config.width, config.width)
-        self.fc3 = nn.Linear(config.width, config.width)
+        #self.fc2 = nn.Linear(config.width, config.width)
+        #self.fc3 = nn.Linear(config.width, config.width)
         self.fc6 = nn.Linear(config.width, self.outputSize)
 
         #I don't know how this function works but whatever
@@ -95,8 +99,11 @@ class Net(nn.Module):
         #https://gist.github.com/Tushar-N/dfca335e370a2bc3bc79876e6270099e
 
         #make it a batch of 1 in case it's just a single
+        #it might be a list if we're batching multiple sequences together, and then it's fine
+        #it might already be a torch tensor if it's just a batch of 1
+        #in that case it will have 3 dimensions instead of 2, and the first dimension will be 1
         isSingle = False
-        if type(infoset[0][0]) == int:
+        if type(infoset) == torch.Tensor and len(infoset.shape) != 3:
             isSingle = True
             infoset = [infoset]
 
@@ -129,6 +136,7 @@ class Net(nn.Module):
         #LSTM expects a shape of (L, B, D)
         #embedded = torch.transpose(embedded, 0, 1)
 
+        
         packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, lengths)
         del lengths
         del seq_tensor
@@ -149,8 +157,8 @@ class Net(nn.Module):
 
         #lstmOutput = lstmOutput[0].view(-1)
         x = F.relu(self.fc1(lstmOutput))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
+        #x = F.relu(self.fc2(x))
+        #x = F.relu(self.fc3(x))
         x = self.fc6(x)
         #normalize to 0 mean and unit variance
         #like in the paper
@@ -230,20 +238,20 @@ class DeepCfrModel:
         self.net.to(device)
         return self.net(data, device).cpu().detach().numpy()
 
-    def train(self, epochs=100):
+    def train(self, epochs):
         #move from write cache to db
         self.clearSampleCache()
 
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         #device = torch.device('cpu')
 
-        self.net = Net(softmax=self.softmax)
-        self.net.float()
+        #self.net = Net(softmax=self.softmax)
+        #self.net.float()
         self.net = self.net.to(device)
         #self.net = self.net.moveToDevice(device)
         #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
-        self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
-        miniBatchSize = 4
+        #self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+        miniBatchSize = config.miniBatchSize
 
         #data needs to be a python list of python lists due to variable lengths
         #everything else can be a proper tensor
@@ -254,21 +262,27 @@ class DeepCfrModel:
             return data, labels, iters
 
         dataset = dataStorage.Dataset(self.name, self.sharedDict, self.outputSize)
-        loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=True, num_workers=4, pin_memory=True, collate_fn=my_collate)
+        loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=False, num_workers=config.numWorkers, pin_memory=True, collate_fn=my_collate)
 
         print('dataset size:', dataset.size, file=sys.stderr)
 
-        batchIter = iter(loader)
-        for i in range(epochs):
+        i = 0
+        chunkSize = dataset.size  / (miniBatchSize * 10)
+        for data, labels, iters in loader:
+            i += 1
+
+        #batchIter = iter(loader)
+        #for i in range(epochs):
             #print('getting data from loader', file=sys.stderr)
-            try:
-                data, labels, iters = next(batchIter)
-            except StopIteration:
-                batchIter = iter(loader)
-                data, labels, iters = next(batchIter)
+            #try:
+                #data, labels, iters = next(batchIter)
+            #except StopIteration:
+                #batchIter = iter(loader)
+                #data, labels, iters = next(batchIter)
 
             labels = labels.float().to(device)
             iters = iters.float().to(device)
+            #data = data.long().to(device)
 
             #print('getting ys', file=sys.stderr)
             #evaluate on network
@@ -279,8 +293,10 @@ class DeepCfrModel:
             #loss function from the paper
             loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))
             #print the last 10 losses
-            if i > epochs-11:
-                print(i, loss, file=sys.stderr)
+            #if i > epochs-11:
+            if i > chunkSize:
+                print(loss, file=sys.stderr)
+                i = 0
             #get gradient of loss
             #print('backward', file=sys.stderr)
             #use amp because nvidia said so
