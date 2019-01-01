@@ -26,7 +26,7 @@ bigCache = False
 
 #playing actual non-training games
 probCutoff = 0.03
-numTestGames = 10
+numTestGames = 20
 
 #general game config
 gameName = 'warPoker'
@@ -37,6 +37,35 @@ if gameName == 'warPoker':
 
     #search
     numProcesses = 8
+    limit = 0
+    seed = None
+    resumeIter = 53
+    innerLoops = 200
+    branchingLimit = None
+    depthLimit = None
+
+    #training
+    advEpochs = 4
+    stratEpochs = 8
+    #right now we don't support mini batching
+    miniBatchSize = 16
+    numWorkers = 16
+
+    #model
+    numTokenBits = 5
+    vocabSize = 100
+    embedSize = 5
+    lstmSize = 1024
+    width = 64
+    learnRate = 0.0001
+    sampleCacheSize = 1000
+
+
+elif gameName == 'pokemon':
+    #TODO something other than just copying and pasting from war poker
+    """
+    #search
+    numProcesses = 0
     limit = 50
     seed = None
     resumeIter = None
@@ -52,14 +81,10 @@ if gameName == 'warPoker':
 
     #model
     numTokenBits = 5
-    embedSize = 10
-    lstmSize = 1024
-    width = 256
-    learnRate = 0.0001
+    vocabSize = 100
+    embedSize = 5
+    lstmSize = 128
+    width = 64
+    learnRate = 0.01
     sampleCacheSize = 1000
-
-
-elif gameName == 'pokemon':
-    pass
-    #TODO
-
+    """

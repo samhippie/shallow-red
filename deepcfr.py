@@ -146,6 +146,7 @@ class DeepCfrAgent:
     def getProbs(self, player, infoset, actions):
         sm = self.stratModels[player]
         stratProbs = sm.predict(infoset)
+        print('strat probs', stratProbs)
         actionNums = [config.game.enumAction(a) for a in actions]
         probs = []
         for n in actionNums:

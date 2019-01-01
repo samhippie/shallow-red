@@ -9,6 +9,7 @@ import torch
 import torch.multiprocessing
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.nn.utils
 import torch.optim as optim
 import torch.utils.data
 from torchvision import transforms
@@ -44,15 +45,15 @@ def tokenToTensor(x):
             numberMap[str(i)] = numToBinary(i)
 
     if x in numberMap:
-        return torch.tensor([0, *numberMap[x]])
+        return torch.tensor([hash(x), *numberMap[x]])
     else:
         return torch.tensor([hash(x), *numberMap['0']])
 
 #formats the infoset so it can be processed by the network
 #this is how infosets should be stored
 def infosetToTensor(infoset):
-    if type(infoset[0]) == list:
-        return [torch.stack([tokenToTensor(token) for token in seq]) for seq in infoset]
+    #if type(infoset[0]) == list:
+        #return [torch.stack([tokenToTensor(token) for token in seq]) for seq in infoset]
     return torch.stack([tokenToTensor(token) for token in infoset])
 
 #model of the network
@@ -71,95 +72,65 @@ class Net(nn.Module):
 
         #turn vocab indices from history into embedding vectors
         #self.embeddings = nn.Embedding(self.vocabSize, embedSize)
-        self.embeddings = HashEmbedding(1000, self.embedSize, append_weight=False)
+        self.embeddings = HashEmbedding(config.vocabSize, self.embedSize, append_weight=False, mask_zero=True)
         #LSTM to process infoset via the embeddings
-        self.lstm = nn.LSTM(self.embedSize + NUM_TOKEN_BITS, config.lstmSize)
+        self.lstm = nn.LSTM(self.embedSize + NUM_TOKEN_BITS, config.lstmSize, batch_first=True)
 
         #simple feed forward for final part
         self.fc1 = nn.Linear(config.lstmSize, config.width)
-        #self.fc2 = nn.Linear(config.width, config.width)
-        #self.fc3 = nn.Linear(config.width, config.width)
+        self.fc2 = nn.Linear(config.width, config.width)
+        self.fc3 = nn.Linear(config.width, config.width)
         self.fc6 = nn.Linear(config.width, self.outputSize)
 
         #I don't know how this function works but whatever
         #that's how we roll
         #self.normalizer = nn.LayerNorm((width,))
 
-    def forward(self, infoset, device=None):
-        #about the infoset input
-        #it should be a batch, which is a set of sequences
-        #and a sequence is a series of tokens
-        #and each token is a [hash, bit, bit, ...]
-        #batch -> sequence -> token -> hash and bits
+    def forward(self, infoset, lengths=None):
+        #I'm trying to be pretty aggressive about deleting things
+        #as it's easy to run out of gpu memory with large sequences
 
-
-        #all the commented out stuff is staying because I'm not sure everything is lined up correctly
-        #after all the transposing and sorting and whatever else to make the lstm happy
-        #this part is based on this
-        #https://gist.github.com/Tushar-N/dfca335e370a2bc3bc79876e6270099e
-
-        #make it a batch of 1 in case it's just a single
-        #it might be a list if we're batching multiple sequences together, and then it's fine
-        #it might already be a torch tensor if it's just a batch of 1
-        #in that case it will have 3 dimensions instead of 2, and the first dimension will be 1
         isSingle = False
-        if type(infoset) == torch.Tensor and len(infoset.shape) != 3:
+        if len(infoset.shape) == 2:
             isSingle = True
-            infoset = [infoset]
+            infoset = infoset[None, :, :]
 
-        lengths = torch.LongTensor([len(seq) for seq in infoset])
-        if device:
-            lengths = lengths.to(device)
-        seq_tensor = torch.zeros((len(infoset), lengths.max(), NUM_TOKEN_BITS + 1)).long()
-        if device:
-            seq_tensor = seq_tensor.to(device)
-            for idx, (seq, seqlen) in enumerate(zip(infoset, lengths)):
-                seq_tensor[idx, :seqlen] = torch.LongTensor(seq).to(device)
-        else:
-            for idx, (seq, seqlen) in enumerate(zip(infoset, lengths)):
-                seq_tensor[idx, :seqlen] = torch.LongTensor(seq)
+        #embed the word hash, which is the first element
+        #print('infoset', infoset)
+        embedded = self.embeddings(infoset[:,:,0])
+        #print('embedded', embedded)
 
-        #sort by sequence length
-        lengths, sort_idx = lengths.sort(0, descending=True)
-        seq_tensor = seq_tensor[sort_idx]
-        #LSTM expects a shape of (L, B, D)
-        #?
-        #infoset = infoset.transpose(0, 1)
-
-        seq_tensor = torch.transpose(seq_tensor, 0, 1)
-        #keep the batches and sequence, but only pick the first element of the token i.e. the hash
-        embedded = self.embeddings(seq_tensor[:, :, 0])
+        #embedding seems to spit out some pretty low-magnitude vectors
+        #so let's try normalizing
+        #embedded = F.normalize(embedded, p=2, dim=2)
         #replace the hash with the embedded vector
-        embedded = torch.cat((embedded, seq_tensor[:, :, 1:].float()), 2)
+        embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
+        del infoset
 
+        #lengths are passed in if we have to worry about padding
+        #https://towardsdatascience.com/taming-lstms-variable-sized-mini-batches-and-why-pytorch-is-good-for-your-health-61d35642972e
+        if lengths is not None:
+            embedded = torch.nn.utils.rnn.pack_padded_sequence(embedded, lengths, batch_first=True)
 
-        #LSTM expects a shape of (L, B, D)
-        #embedded = torch.transpose(embedded, 0, 1)
+        #remember that we set batch_first to be true
+        x, _ = self.lstm(embedded)
 
-        
-        packed = torch.nn.utils.rnn.pack_padded_sequence(embedded, lengths)
-        del lengths
-        del seq_tensor
+        #have to undo our packing before moving on
+        if lengths is not None:
+            x, lengths = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
+            #select the last output before padding
+            x = x[torch.arange(0, x.shape[0]), lengths-1]
+        else:
+            x = x[-1]
 
-        #_, lstmOutput = self.lstm(lstmInput.view(len(infoset), 1, -1), self.hidden)
-        #_, (ht, ct) = self.lstm(packed, self.hidden)
-        _, (ht, ct) = self.lstm(packed)
-        #print('output shape', output.shape)
-        #print('hidden shape', hidden.shape)
-        #output, hidden = torch.nn.utils.rnn.pad_packed_sequence(output)
-        #print('output2 shape', output.shape)
-        #print('hidden2 shape', hidden.shape)
-        #lstmOutput = torch.transpose(hidden, 0, 1)
-        lstmOutput = ht[-1]
+        #print('lstm output', x)
+        del embedded
 
-        #restore original order in batch
-        lstmOutput = lstmOutput[sort_idx.sort(0)[1]]
-
-        #lstmOutput = lstmOutput[0].view(-1)
-        x = F.relu(self.fc1(lstmOutput))
-        #x = F.relu(self.fc2(x))
-        #x = F.relu(self.fc3(x))
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x))
         x = self.fc6(x)
+        #print('out of linear', x)
         #normalize to 0 mean and unit variance
         #like in the paper
         #x = self.normalizer(x)
@@ -235,86 +206,90 @@ class DeepCfrModel:
     def predict(self, infoset):
         data = infosetToTensor(infoset)
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-        self.net.to(device)
-        return self.net(data, device).cpu().detach().numpy()
+        self.net = self.net.to(device)
+        data = data.to(device)
+        return self.net(data).cpu().detach().numpy()
 
-    def train(self, epochs):
+    def train(self, epochs=1):
         #move from write cache to db
         self.clearSampleCache()
 
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         #device = torch.device('cpu')
 
-        #self.net = Net(softmax=self.softmax)
-        #self.net.float()
+        self.net = Net(softmax=self.softmax)
+        self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
         self.net = self.net.to(device)
-        #self.net = self.net.moveToDevice(device)
-        #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
-        #self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
         miniBatchSize = config.miniBatchSize
 
-        #data needs to be a python list of python lists due to variable lengths
-        #everything else can be a proper tensor
-        def my_collate(batch):
-            data = [b[0] for b in batch]
-            labels = torch.stack([b[1] for b in batch])
-            iters = torch.stack([b[2] for b in batch])
-            return data, labels, iters
+        def myCollate(batch):
+            #based on the collate_fn here
+            #https://github.com/yunjey/pytorch-tutorial/blob/master/tutorials/03-advanced/image_captioning/data_loader.py
 
-        dataset = dataStorage.Dataset(self.name, self.sharedDict, self.outputSize)
-        loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=False, num_workers=config.numWorkers, pin_memory=True, collate_fn=my_collate)
+            #sort by data length
+            batch.sort(key=lambda x: len(x[0]), reverse=True)
+            data, labels, iters = zip(*batch)
 
-        print('dataset size:', dataset.size, file=sys.stderr)
+            #labels and iters have a fixed size, so we can just stack
+            labels = torch.stack(labels)
+            iters = torch.stack(iters)
 
-        i = 0
-        chunkSize = dataset.size  / (miniBatchSize * 10)
-        for data, labels, iters in loader:
-            i += 1
+            #sequences are padded with 0 vectors to make the lengths the same
+            lengths = [len(d) for d in data]
+            padded = torch.zeros(len(data), max(lengths), len(data[0][0]), dtype=torch.long)
+            for i, d in enumerate(data):
+                end = lengths[i]
+                padded[i, :end] = d[:end]
 
-        #batchIter = iter(loader)
-        #for i in range(epochs):
-            #print('getting data from loader', file=sys.stderr)
-            #try:
-                #data, labels, iters = next(batchIter)
-            #except StopIteration:
-                #batchIter = iter(loader)
-                #data, labels, iters = next(batchIter)
+            #need to know the lengths so we can pack later
+            lengths = torch.tensor(lengths)
 
-            labels = labels.float().to(device)
-            iters = iters.float().to(device)
-            #data = data.long().to(device)
+            return padded, lengths, labels, iters
 
-            #print('getting ys', file=sys.stderr)
-            #evaluate on network
-            self.optimizer.zero_grad()
-            ys = self.net(data, device)
+        for j in range(epochs):
+            if epochs > 1:
+                print('epoch', j, file=sys.stderr)
+            dataset = dataStorage.Dataset(self.name, self.sharedDict, self.outputSize)
+            loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=True, num_workers=config.numWorkers, pin_memory=True, collate_fn=myCollate)
 
-            #print('getting loss', file=sys.stderr)
-            #loss function from the paper
-            loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))
-            #print the last 10 losses
-            #if i > epochs-11:
-            if i > chunkSize:
-                print(loss, file=sys.stderr)
-                i = 0
-            #get gradient of loss
-            #print('backward', file=sys.stderr)
-            #use amp because nvidia said so
-            with amp_handle.scale_loss(loss, self.optimizer) as scaled_loss:
-                scaled_loss.backward()
-            #clip gradient norm, which was done in the paper
-            #print('clip', file=sys.stderr)
-            nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
-            #train the network
-            #print('step', file=sys.stderr)
-            self.optimizer.step()
-            #print('done with step', file=sys.stderr)
+            print('dataset size:', dataset.size, file=sys.stderr)
 
-            #cleaning up might improve memory usage
-            del loss
-            del ys
+            #print out loss every 1/10th of an epoch
+            i = 0
+            chunkSize = dataset.size  / (miniBatchSize * 10)
+            for data, dataLengths, labels, iters in loader:
+                i += 1
 
-        #self.net = self.net.to(torch.device('cpu'))
+                labels = labels.float().to(device)
+                iters = iters.float().to(device)
+                data = data.long().to(device)
+                dataLengths = dataLengths.long().to(device)
+
+                #evaluate on network
+                self.optimizer.zero_grad()
+                ys = self.net(data, lengths=dataLengths)
+
+                #loss function from the paper
+                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))
+                del ys
+
+                if i > chunkSize:
+                    print(loss, file=sys.stderr)
+                    i = 0
+
+                #get gradient of loss
+                #use amp because nvidia said it's better
+                with amp_handle.scale_loss(loss, self.optimizer) as scaled_loss:
+                    scaled_loss.backward()
+
+                del loss
+
+                #clip gradient norm, which was done in the paper
+                #nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
+
+                #train the network
+                self.optimizer.step()
+
 
 def netTest():
     net = Net()

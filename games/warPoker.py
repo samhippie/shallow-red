@@ -97,7 +97,7 @@ class Game:
         self._winner = None
 
         self.verbose = verbose
-        self.infosets = [['start','|'],['start','|']]
+        self.infosets = [['start'],['start']]
 
     async def startGame(self):
         #dealer is determined by seed
@@ -108,7 +108,7 @@ class Game:
         self.random.shuffle(self.deck)
         self.hands = [self.deck.pop(), self.deck.pop()]
         for i in range(2):
-            self.infosets[i] += ['hand', str(self.hands[i]), '|']
+            self.infosets[i] += ['hand', str(self.hands[i])]
 
         if self.verbose:
             print('hands', self.hands, file=self.file)
@@ -161,7 +161,7 @@ class Game:
         for i in range(2):
             #infosets are always in first person
             p = 0 if i == player else 1
-            self.infosets[i] += [str(p), action, '|']
+            self.infosets[i] += [str(p), action]
 
 
         #I could probably simplify this by reducing the number of actions to 2
