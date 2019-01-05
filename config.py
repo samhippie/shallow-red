@@ -17,15 +17,20 @@ class WarPoker:
 #general settings
 
 #search
+#whether to print out each line in our training games (for debugging)
 verboseTraining = False
 
 #data storage
-dataDir = '/home/sam/data/'
+dataDir = '/home/sam/data-ssd/'
+#whether to store all samples in RAM rather than on disk
 inMemory = False
+#whether to explicitly cache samples from disk in RAM
 bigCache = False
 
 #playing actual non-training games
+#ignore moves with probabilities below this (likely just noise)
 probCutoff = 0.03
+#how many games to play after training
 numTestGames = 20
 
 #general game config
@@ -36,28 +41,51 @@ if gameName == 'warPoker':
     GameConfig = WarPoker
 
     #search
+    #number of search processes (limited by cpu utilization and gpu memory)
     numProcesses = 8
-    limit = 0
+    #number of search iterations
+    limit = 100
+    #seed for all search games, None for default
     seed = None
-    resumeIter = 53
-    innerLoops = 200
+    #which search iteration to start from, None for fresh start (delete data)
+    resumeIter = 100
+    #number of game tree traversals per search iteration
+    innerLoops = 40
+    #limit on number of branches to take per action in a traversal
+    #(branches not taken are still probed via rollout)
     branchingLimit = None
+    #maximum depth in a traversal before rollout
     depthLimit = None
 
     #training
-    advEpochs = 4
-    stratEpochs = 8
-    #right now we don't support mini batching
-    miniBatchSize = 16
-    numWorkers = 16
+    #number of epochs for training the advantage network
+    advEpochs = 40
+    #number of epochs for training the strategy network
+    stratEpochs = 60
+    #number of samples in a batch
+    miniBatchSize = 4
+    #number of workers for the data loader
+    numWorkers = 4
+    #whether to create a fresh advantage network for each iteration
+    newIterNets = True
 
     #model
+    #number of bits for numbers in infosets
     numTokenBits = 5
-    vocabSize = 100
+    #maximum size for infoset vocabulary
+    vocabSize = 64
+    #size of embedding vector
     embedSize = 5
-    lstmSize = 1024
-    width = 64
-    learnRate = 0.0001
+    embedDropoutPercent = 0.5
+    #size of hidden state of lstm
+    lstmSize = 32
+    #number of lstm layers
+    numLstmLayers = 2
+    #size of each fully connected layer
+    width = 32
+    #learn rate for training
+    learnRate = 0.004
+    #how many samples to cache before writing to disk
     sampleCacheSize = 1000
 
 

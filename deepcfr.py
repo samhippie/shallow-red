@@ -90,6 +90,7 @@ class DeepCfrAgent:
             if self.pid == 0:
                 print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
 
+
             #for self.small games, this is necessary to get a decent number of samples
             for j in range(innerLoops):
                 self.needsTraining = True
@@ -101,6 +102,8 @@ class DeepCfrAgent:
                 game = config.game.Game(context=context, seed=curSeed, history=history, verbose=self.verbose)
                 await game.startGame()
                 await self.cfrRecur(context, game, curSeed, history, i)
+
+
 
             #save our adv data after each iteration
             #so the non-zero pid workers don't have data cached
@@ -123,6 +126,10 @@ class DeepCfrAgent:
                 self.advModels[i % 2].net = self.sharedDict['advNet' + str(i % 2)]
             self.needsTraining = False
 
+            if self.pid == 0:
+                print('\nplaying games', file=sys.stderr)
+
+            
         #clear the sample caches so the master agent can train with our data
         for sm in self.stratModels:
             sm.clearSampleCache()
@@ -146,6 +153,7 @@ class DeepCfrAgent:
     def getProbs(self, player, infoset, actions):
         sm = self.stratModels[player]
         stratProbs = sm.predict(infoset)
+        print('infoset', infoset)
         print('strat probs', stratProbs)
         actionNums = [config.game.enumAction(a) for a in actions]
         probs = []
@@ -258,6 +266,7 @@ class DeepCfrAgent:
                 for p,r in zip(probs, rewards):
                     stateExpValue += p * r
                 advantages = [r - stateExpValue for r in rewards]
+                print('advantages', advantages)
 
                 am = self.advModels[onPlayer]
                 am.addSample(infoset, zip(actions, advantages), iter // 2 + 1)

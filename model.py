@@ -72,14 +72,23 @@ class Net(nn.Module):
 
         #turn vocab indices from history into embedding vectors
         #self.embeddings = nn.Embedding(self.vocabSize, embedSize)
-        self.embeddings = HashEmbedding(config.vocabSize, self.embedSize, append_weight=False, mask_zero=True)
+        self.embeddings = HashEmbedding(config.vocabSize, self.embedSize, append_weight=False, mask_zero=False)
+
+        self.dropout = nn.Dropout(config.embedDropoutPercent)
+
         #LSTM to process infoset via the embeddings
-        self.lstm = nn.LSTM(self.embedSize + NUM_TOKEN_BITS, config.lstmSize, batch_first=True)
+        self.lstm = nn.LSTM(self.embedSize + NUM_TOKEN_BITS, config.lstmSize, num_layers=config.numLstmLayers, batch_first=True)
+
+        #attention
+        #https://stackoverflow.com/questions/50571991/implementing-luong-attention-in-pytorch
+        #self.attn = nn.Linear(lstmSize, lstmSize)
+        #self.whc = nn.Linear(lstmSize * 2, lstmSize)
+        #self.ws = nn.Linear(lstmSize, lstmSize)
 
         #simple feed forward for final part
         self.fc1 = nn.Linear(config.lstmSize, config.width)
-        self.fc2 = nn.Linear(config.width, config.width)
-        self.fc3 = nn.Linear(config.width, config.width)
+        #self.fc2 = nn.Linear(config.width, config.width)
+        #self.fc3 = nn.Linear(config.width, config.width)
         self.fc6 = nn.Linear(config.width, self.outputSize)
 
         #I don't know how this function works but whatever
@@ -102,7 +111,8 @@ class Net(nn.Module):
 
         #embedding seems to spit out some pretty low-magnitude vectors
         #so let's try normalizing
-        #embedded = F.normalize(embedded, p=2, dim=2)
+        embedded = F.normalize(embedded, p=2, dim=2)
+        embedded = self.dropout(embedded)
         #replace the hash with the embedded vector
         embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
         del infoset
@@ -115,20 +125,21 @@ class Net(nn.Module):
         #remember that we set batch_first to be true
         x, _ = self.lstm(embedded)
 
+
         #have to undo our packing before moving on
         if lengths is not None:
             x, lengths = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
             #select the last output before padding
             x = x[torch.arange(0, x.shape[0]), lengths-1]
         else:
-            x = x[-1]
+            x = x[:,-1]
 
         #print('lstm output', x)
         del embedded
 
         x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
+        #x = F.relu(self.fc2(x))
+        #x = F.relu(self.fc3(x))
         x = self.fc6(x)
         #print('out of linear', x)
         #normalize to 0 mean and unit variance
@@ -161,7 +172,6 @@ class DeepCfrModel:
         self.outputSize = config.game.numActions
 
         self.net = Net(softmax=softmax)
-        self.net.float()
         self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
         #self.optimizer = optim.SGD(self.net.parameters(), lr=lr, momentum=0.9)
 
@@ -181,8 +191,10 @@ class DeepCfrModel:
 
         labelTensor = np.zeros(self.outputSize)
         for action, value in label:
+            print(action, value)
             n = config.game.enumAction(action)
             labelTensor[n] = value
+        print('saving label', labelTensor)
 
         iterTensor = np.array([iter])
 
@@ -217,10 +229,12 @@ class DeepCfrModel:
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         #device = torch.device('cpu')
 
-        self.net = Net(softmax=self.softmax)
-        self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+        if config.newIterNets:
+            self.net = Net(softmax=self.softmax)
+            self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
         self.net = self.net.to(device)
         miniBatchSize = config.miniBatchSize
+        self.net.train(True)
 
         def myCollate(batch):
             #based on the collate_fn here
@@ -268,6 +282,10 @@ class DeepCfrModel:
                 #evaluate on network
                 self.optimizer.zero_grad()
                 ys = self.net(data, lengths=dataLengths)
+                #print('data', data)
+                #print('ys', ys)
+                #print('label', labels)
+                #print('iters', iters)
 
                 #loss function from the paper
                 loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))
@@ -285,11 +303,12 @@ class DeepCfrModel:
                 del loss
 
                 #clip gradient norm, which was done in the paper
-                #nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
+                nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
 
                 #train the network
                 self.optimizer.step()
 
+        self.net.train(False)
 
 def netTest():
     net = Net()
