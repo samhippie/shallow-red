@@ -92,7 +92,7 @@ class Net(nn.Module):
         #that's how we roll
         #self.normalizer = nn.LayerNorm((width,))
 
-    def forward(self, infoset, lengths=None):
+    def forward(self, infoset, lengths=None, trace=False):
         #I'm trying to be pretty aggressive about deleting things
         #as it's easy to run out of gpu memory with large sequences
 
@@ -102,14 +102,16 @@ class Net(nn.Module):
             infoset = infoset[None, :, :]
 
         #embed the word hash, which is the first element
-        #print('infoset', infoset)
+        if trace:
+            print('infoset', infoset)
         embedded = self.embeddings(infoset[:,:,0])
-        #print('embedded', embedded)
+        if trace:
+            print('embedded', embedded)
 
         #embedding seems to spit out some pretty low-magnitude vectors
         #so let's try normalizing
         #embedded = F.normalize(embedded, p=2, dim=2)
-        #embedded = self.dropout(embedded)
+        embedded = self.dropout(embedded)
         #replace the hash with the embedded vector
         embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
         del infoset
@@ -131,27 +133,19 @@ class Net(nn.Module):
         xWithContext = torch.cat([embedded, x], 2)
         outattn = self.attn(xWithContext)
         #zero out (actually -inf) weight vectors at outattn[n,i>l], l is lengths[n]
-        #TODO if minibatch is 1, then we can worry about this later
         #softmax so the weights for each element of each output add up to 1
         outattn = F.softmax(outattn, dim=1)
+        if trace:
+            print('outattn', outattn, file=sys.stderr)
         #apply the weights to each output
         #x and outattn are the same shape, so this is easy
+        #if we padded, then the padding outputs in x are 0, so they don't contribute to the sum
+        #so it just works
         x = x * outattn
         #sum along the sequence
-        x = torch.sum(outattn, dim=1)
-
-        """
-        #have to undo our packing before moving on
-        if lengths is not None:
-            x, lengths = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
-            #select the last output before padding
-            x = x[torch.arange(0, x.shape[0]), lengths-1]
-        else:
-            x = x[:,-1]
-
-        #print('lstm output', x)
-        del embedded
-        """
+        x = torch.sum(x, dim=1)
+        if trace:
+            print('x to fc', x, file=sys.stderr)
 
         x = F.relu(self.fc1(x))
         #x = F.relu(self.fc2(x))
@@ -231,12 +225,12 @@ class DeepCfrModel:
         #so we can use the same training data in the future
         self.clearSampleCache()
 
-    def predict(self, infoset):
+    def predict(self, infoset, trace=False):
         data = infosetToTensor(infoset)
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         self.net = self.net.to(device)
         data = data.to(device)
-        return self.net(data).cpu().detach().numpy()
+        return self.net(data, trace=trace).cpu().detach().numpy()
 
     def train(self, epochs=1):
         #move from write cache to db
