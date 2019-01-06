@@ -59,11 +59,11 @@ if gameName == 'warPoker':
 
     #training
     #number of epochs for training the advantage network
-    advEpochs = 40
+    advEpochs = 5
     #number of epochs for training the strategy network
-    stratEpochs = 60
+    stratEpochs = 10
     #number of samples in a batch
-    miniBatchSize = 4
+    miniBatchSize = 1
     #number of workers for the data loader
     numWorkers = 4
     #whether to create a fresh advantage network for each iteration
@@ -76,7 +76,7 @@ if gameName == 'warPoker':
     vocabSize = 64
     #size of embedding vector
     embedSize = 5
-    embedDropoutPercent = 0.5
+    embedDropoutPercent = 0.2
     #size of hidden state of lstm
     lstmSize = 32
     #number of lstm layers

@@ -80,10 +80,7 @@ class Net(nn.Module):
         self.lstm = nn.LSTM(self.embedSize + NUM_TOKEN_BITS, config.lstmSize, num_layers=config.numLstmLayers, batch_first=True)
 
         #attention
-        #https://stackoverflow.com/questions/50571991/implementing-luong-attention-in-pytorch
-        #self.attn = nn.Linear(lstmSize, lstmSize)
-        #self.whc = nn.Linear(lstmSize * 2, lstmSize)
-        #self.ws = nn.Linear(lstmSize, lstmSize)
+        self.attn = nn.Linear(self.embedSize + NUM_TOKEN_BITS + config.lstmSize, config.lstmSize)
 
         #simple feed forward for final part
         self.fc1 = nn.Linear(config.lstmSize, config.width)
@@ -111,8 +108,8 @@ class Net(nn.Module):
 
         #embedding seems to spit out some pretty low-magnitude vectors
         #so let's try normalizing
-        embedded = F.normalize(embedded, p=2, dim=2)
-        embedded = self.dropout(embedded)
+        #embedded = F.normalize(embedded, p=2, dim=2)
+        #embedded = self.dropout(embedded)
         #replace the hash with the embedded vector
         embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
         del infoset
@@ -120,12 +117,30 @@ class Net(nn.Module):
         #lengths are passed in if we have to worry about padding
         #https://towardsdatascience.com/taming-lstms-variable-sized-mini-batches-and-why-pytorch-is-good-for-your-health-61d35642972e
         if lengths is not None:
-            embedded = torch.nn.utils.rnn.pack_padded_sequence(embedded, lengths, batch_first=True)
+            lstmInput = torch.nn.utils.rnn.pack_padded_sequence(embedded, lengths, batch_first=True)
+        else:
+            lstmInput = embedded
 
         #remember that we set batch_first to be true
-        x, _ = self.lstm(embedded)
+        x, _ = self.lstm(lstmInput)
 
+        if lengths is not None:
+            x, lengths = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
 
+        #use both input and output of lstm to get attention weights
+        xWithContext = torch.cat([embedded, x], 2)
+        outattn = self.attn(xWithContext)
+        #zero out (actually -inf) weight vectors at outattn[n,i>l], l is lengths[n]
+        #TODO if minibatch is 1, then we can worry about this later
+        #softmax so the weights for each element of each output add up to 1
+        outattn = F.softmax(outattn, dim=1)
+        #apply the weights to each output
+        #x and outattn are the same shape, so this is easy
+        x = x * outattn
+        #sum along the sequence
+        x = torch.sum(outattn, dim=1)
+
+        """
         #have to undo our packing before moving on
         if lengths is not None:
             x, lengths = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
@@ -136,6 +151,7 @@ class Net(nn.Module):
 
         #print('lstm output', x)
         del embedded
+        """
 
         x = F.relu(self.fc1(x))
         #x = F.relu(self.fc2(x))
@@ -191,10 +207,10 @@ class DeepCfrModel:
 
         labelTensor = np.zeros(self.outputSize)
         for action, value in label:
-            print(action, value)
+            #print(action, value)
             n = config.game.enumAction(action)
             labelTensor[n] = value
-        print('saving label', labelTensor)
+        #print('saving label', labelTensor)
 
         iterTensor = np.array([iter])
 

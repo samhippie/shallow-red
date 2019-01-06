@@ -266,7 +266,7 @@ class DeepCfrAgent:
                 for p,r in zip(probs, rewards):
                     stateExpValue += p * r
                 advantages = [r - stateExpValue for r in rewards]
-                print('advantages', advantages)
+                #print('advantages', advantages)
 
                 am = self.advModels[onPlayer]
                 am.addSample(infoset, zip(actions, advantages), iter // 2 + 1)
