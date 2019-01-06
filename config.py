@@ -42,13 +42,13 @@ if gameName == 'warPoker':
 
     #search
     #number of search processes (limited by cpu utilization and gpu memory)
-    numProcesses = 8
+    numProcesses = 0
     #number of search iterations
     limit = 100
     #seed for all search games, None for default
     seed = None
     #which search iteration to start from, None for fresh start (delete data)
-    resumeIter = 100
+    resumeIter = None
     #number of game tree traversals per search iteration
     innerLoops = 40
     #limit on number of branches to take per action in a traversal
@@ -63,7 +63,7 @@ if gameName == 'warPoker':
     #number of epochs for training the strategy network
     stratEpochs = 10
     #number of samples in a batch
-    miniBatchSize = 1
+    miniBatchSize = 4
     #number of workers for the data loader
     numWorkers = 4
     #whether to create a fresh advantage network for each iteration
@@ -76,17 +76,20 @@ if gameName == 'warPoker':
     vocabSize = 64
     #size of embedding vector
     embedSize = 5
+    #dropout rate after embedding during training
     embedDropoutPercent = 0.2
     #size of hidden state of lstm
     lstmSize = 32
     #number of lstm layers
-    numLstmLayers = 2
+    numLstmLayers = 1
     #size of each fully connected layer
     width = 32
     #learn rate for training
     learnRate = 0.004
-    #how many samples to cache before writing to disk
+    #how many samples to cache before writing to disk (give or take)
     sampleCacheSize = 1000
+    #max size on number of samples (only supported for on-disk sample storage)
+    maxNumSamples = 10000
 
 
 elif gameName == 'pokemon':

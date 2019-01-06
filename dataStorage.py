@@ -64,21 +64,34 @@ def addSamples(lock, id, samples, sharedDict):
         #brand new sample set
         if count == 0:
             lines.append(id + ',' + str(len(samples)) + '\n')
-        #update the indices after we're written our files
-        with open(DATA_DIR + 'index', 'w') as file:
-            for line in lines:
-                print(line, file=file, end='')
+        if config.maxNumSamples and count >= config.maxNumSamples:
+            replace = True
+            #we're replacing existing files, so no need to update the index
+        else:
+            replace = False
+            #update the indices after we're written our files
+            with open(DATA_DIR + 'index', 'w') as file:
+                for line in lines:
+                    print(line, file=file, end='')
+
+    #replacement means no amount of concurrency is safe here
+
+    #we really should support replacement of in-memory samples
+    if not IN_MEMORY:
+        if replace:
+            writeIndices = np.random.choice(count, len(samples), replace=False)
+            for i, sample in zip(writeIndices, samples):
+                with open(DATA_DIR + id + '/' + str(i), 'wb+') as file:
+                    pickle.dump(sample, file)
+        else:
+            #write our each sample to its own file
+            if not os.path.exists(DATA_DIR + id):
+                os.mkdir(DATA_DIR + id)
+            for i in range(len(samples)):
+                with open(DATA_DIR + id + '/' + str(count + i), 'wb+') as file:
+                    pickle.dump(samples[i], file)
 
     lock.release()
-
-    if not IN_MEMORY:
-        #write our each sample to its own file
-        if not os.path.exists(DATA_DIR + id):
-            os.mkdir(DATA_DIR + id)
-        for i in range(len(samples)):
-            with open(DATA_DIR + id + '/' + str(count + i), 'wb+') as file:
-                pickle.dump(samples[i], file)
-                #np.save(file, samples[i])
 
 
 class Dataset(torch.utils.data.Dataset):
