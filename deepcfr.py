@@ -90,6 +90,10 @@ class DeepCfrAgent:
             if self.pid == 0:
                 print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
 
+            #this is mainly used for setting a condition breakpoint
+            #there's probably a better way
+            #if i > 5:
+                #print('ready for debugging')
 
             #for self.small games, this is necessary to get a decent number of samples
             for j in range(innerLoops):
@@ -152,7 +156,7 @@ class DeepCfrAgent:
 
     def getProbs(self, player, infoset, actions):
         sm = self.stratModels[player]
-        stratProbs = sm.predict(infoset)
+        stratProbs = sm.predict(infoset, trace=True)
         print('infoset', infoset)
         print('strat probs', stratProbs)
         actionNums = [config.game.enumAction(a) for a in actions]
@@ -185,7 +189,8 @@ class DeepCfrAgent:
             else:
                 return -1 * req['win']
 
-        infoset = game.getInfoset(player)
+        #game uses append, so we have to make a copy to keep everything consistent when we get advantages later
+        infoset = copy.copy(game.getInfoset(player))
 
         if player == offPlayer:
             #get probs so we can sample a single action
