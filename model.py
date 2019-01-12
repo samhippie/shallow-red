@@ -80,17 +80,13 @@ class Net(nn.Module):
         self.lstm = nn.LSTM(self.embedSize + NUM_TOKEN_BITS, config.lstmSize, num_layers=config.numLstmLayers, batch_first=True)
 
         #attention
-        self.attn = nn.Linear(self.embedSize + NUM_TOKEN_BITS + config.lstmSize, config.lstmSize)
+        self.attn = nn.Linear(2 * config.lstmSize, config.lstmSize)
 
         #simple feed forward for final part
         self.fc1 = nn.Linear(config.lstmSize, config.width)
-        #self.fc2 = nn.Linear(config.width, config.width)
-        #self.fc3 = nn.Linear(config.width, config.width)
+        self.fc2 = nn.Linear(config.width, config.width)
+        self.fc3 = nn.Linear(config.width, config.width)
         self.fc6 = nn.Linear(config.width, self.outputSize)
-
-        #I don't know how this function works but whatever
-        #that's how we roll
-        #self.normalizer = nn.LayerNorm((width,))
 
     def forward(self, infoset, lengths=None, trace=False):
         #I'm trying to be pretty aggressive about deleting things
@@ -103,14 +99,14 @@ class Net(nn.Module):
 
         #embed the word hash, which is the first element
         if trace:
-            print('infoset', infoset)
+            print('infoset', infoset, file=sys.stderr)
         embedded = self.embeddings(infoset[:,:,0])
         if trace:
-            print('embedded', embedded)
+            print('embedded', embedded, file=sys.stderr)
 
         #embedding seems to spit out some pretty low-magnitude vectors
         #so let's try normalizing
-        #embedded = F.normalize(embedded, p=2, dim=2)
+        embedded = F.normalize(embedded, p=2, dim=2)
         embedded = self.dropout(embedded)
         #replace the hash with the embedded vector
         embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
@@ -126,17 +122,26 @@ class Net(nn.Module):
         #remember that we set batch_first to be true
         x, _ = self.lstm(lstmInput)
 
+        #get the final output of the lstm
         if lengths is not None:
+            #have to account for padding/packing
             x, lengths = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
+            lasts = x[torch.arange(0, x.shape[0]), lengths-1]
+        else:
+            lasts = x[:,-1]
 
+        if trace:
+            print('lasts', lasts, file=sys.stderr)
         #use both input and output of lstm to get attention weights
-        xWithContext = torch.cat([embedded, x], 2)
+        #keep the batch size, but add extra dimension for sequence length
+        lasts = lasts[:, None, :]
+        #repeat the last output so it matches the sequence length
+        lasts = lasts.repeat(1, x.shape[1], 1)
+        #feed the output of the lstm appended with the final output to the attention layer
+        xWithContext = torch.cat([x, lasts], 2)
         outattn = self.attn(xWithContext)
-        #zero out (actually -inf) weight vectors at outattn[n,i>l], l is lengths[n]
         #softmax so the weights for each element of each output add up to 1
         outattn = F.softmax(outattn, dim=1)
-        if trace:
-            print('outattn', outattn, file=sys.stderr)
         #apply the weights to each output
         #x and outattn are the same shape, so this is easy
         #if we padded, then the padding outputs in x are 0, so they don't contribute to the sum
@@ -148,13 +153,14 @@ class Net(nn.Module):
             print('x to fc', x, file=sys.stderr)
 
         x = F.relu(self.fc1(x))
-        #x = F.relu(self.fc2(x))
-        #x = F.relu(self.fc3(x))
+        #2 and 3 have skip connections, as they have the same sized input and output
+        x = F.relu(self.fc2(x) + x)
+        x = F.relu(self.fc3(x) + x)
+        #deep cfr does normalization here
+        #I'm not sure if this is the right kind of normalization
+        #x = F.normalize(x, p=2, dim=1)
         x = self.fc6(x)
-        #print('out of linear', x)
-        #normalize to 0 mean and unit variance
-        #like in the paper
-        #x = self.normalizer(x)
+
         if self.softmax:
             x = F.softmax(x, dim=1)
 
@@ -183,7 +189,8 @@ class DeepCfrModel:
 
         self.net = Net(softmax=softmax)
         self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
-        #self.optimizer = optim.SGD(self.net.parameters(), lr=lr, momentum=0.9)
+        #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=5, verbose=True)
 
         #cache of (infoset tensor, label tensor, iteration) tuples
         #will eventually be put in training db
@@ -241,8 +248,12 @@ class DeepCfrModel:
 
         if config.newIterNets:
             self.net = Net(softmax=self.softmax)
-            self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+
+
         self.net = self.net.to(device)
+        self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+        #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=5, verbose=True)
         miniBatchSize = config.miniBatchSize
         self.net.train(True)
 
@@ -278,6 +289,8 @@ class DeepCfrModel:
 
             print('dataset size:', dataset.size, file=sys.stderr)
 
+            totalLoss = 0
+
             #print out loss every 1/10th of an epoch
             i = 0
             chunkSize = dataset.size  / (miniBatchSize * 10)
@@ -291,32 +304,33 @@ class DeepCfrModel:
 
                 #evaluate on network
                 self.optimizer.zero_grad()
-                ys = self.net(data, lengths=dataLengths)
-                #print('data', data)
-                #print('ys', ys)
-                #print('label', labels)
-                #print('iters', iters)
+                ys = self.net(data, lengths=dataLengths, trace=False)
+                #print('------------', file=sys.stderr)
+                #print('ys', ys, file=sys.stderr)
+                #print('labels', labels, file=sys.stderr)
+                #print('iters', iters, file=sys.stderr)
+                #print('scaled loss', iters.view(labels.shape[0],-1) * ((labels - ys) ** 2), file=sys.stderr)
 
                 #loss function from the paper
                 loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))
                 del ys
-
-                if i > chunkSize:
-                    print(loss, file=sys.stderr)
-                    i = 0
 
                 #get gradient of loss
                 #use amp because nvidia said it's better
                 with amp_handle.scale_loss(loss, self.optimizer) as scaled_loss:
                     scaled_loss.backward()
 
-                del loss
 
                 #clip gradient norm, which was done in the paper
                 nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
 
                 #train the network
                 self.optimizer.step()
+                totalLoss += loss.item()
+
+            avgLoss = totalLoss / dataset.size
+            #self.scheduler.step(avgLoss)
+            print('avgLoss', avgLoss, file=sys.stderr)
 
         self.net.train(False)
 
