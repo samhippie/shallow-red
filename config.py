@@ -42,15 +42,15 @@ if gameName == 'warPoker':
 
     #search
     #number of search processes (limited by cpu utilization and gpu memory)
-    numProcesses = 0
+    numProcesses = 8
     #number of search iterations
-    limit = 100
+    limit = 50
     #seed for all search games, None for default
     seed = None
     #which search iteration to start from, None for fresh start (delete data)
     resumeIter = None
     #number of game tree traversals per search iteration
-    innerLoops = 40
+    innerLoops = 500
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still probed via rollout)
     branchingLimit = None
@@ -61,35 +61,40 @@ if gameName == 'warPoker':
     #number of epochs for training the advantage network
     advEpochs = 5
     #number of epochs for training the strategy network
-    stratEpochs = 10
+    stratEpochs = 5
     #number of samples in a batch
-    miniBatchSize = 4
+    miniBatchSize = 16
     #number of workers for the data loader
-    numWorkers = 4
+    numWorkers = 16
     #whether to create a fresh advantage network for each iteration
-    newIterNets = True
+    newIterNets = False
 
     #model
     #number of bits for numbers in infosets
     numTokenBits = 5
     #maximum size for infoset vocabulary
-    vocabSize = 64
+    vocabSize = 32
     #size of embedding vector
-    embedSize = 5
+    embedSize = 10
     #dropout rate after embedding during training
     embedDropoutPercent = 0.2
     #size of hidden state of lstm
-    lstmSize = 32
+    lstmSize = 128
     #number of lstm layers
-    numLstmLayers = 1
+    numLstmLayers = 2
     #size of each fully connected layer
-    width = 32
+    width = 64
     #learn rate for training
     learnRate = 0.004
     #how many samples to cache before writing to disk (give or take)
     sampleCacheSize = 1000
     #max size on number of samples (only supported for on-disk sample storage)
-    maxNumSamples = 10000
+    maxNumSamples = {
+        'adv0': 20000,
+        'adv1': 20000,
+        'strat0': None,
+        'strat1': None,
+    }
 
 
 elif gameName == 'pokemon':

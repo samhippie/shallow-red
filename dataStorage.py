@@ -64,7 +64,7 @@ def addSamples(lock, id, samples, sharedDict):
         #brand new sample set
         if count == 0:
             lines.append(id + ',' + str(len(samples)) + '\n')
-        if config.maxNumSamples and count >= config.maxNumSamples:
+        if config.maxNumSamples[id] and count >= config.maxNumSamples[id]:
             replace = True
             #we're replacing existing files, so no need to update the index
         else:
@@ -79,10 +79,14 @@ def addSamples(lock, id, samples, sharedDict):
     #we really should support replacement of in-memory samples
     if not IN_MEMORY:
         if replace:
-            writeIndices = np.random.choice(count, len(samples), replace=False)
+            #pick which samples get removed
+            #we need to give old and new samples an equal chance so we don't introduce bias
+            writeIndices = np.random.choice(count + len(samples), len(samples), replace=False)
             for i, sample in zip(writeIndices, samples):
-                with open(DATA_DIR + id + '/' + str(i), 'wb+') as file:
-                    pickle.dump(sample, file)
+                #if we're supposed to replace a sample, then don't save that sample
+                if i < count:
+                    with open(DATA_DIR + id + '/' + str(i), 'wb+') as file:
+                        pickle.dump(sample, file)
         else:
             #write our each sample to its own file
             if not os.path.exists(DATA_DIR + id):
