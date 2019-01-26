@@ -12,13 +12,13 @@ import torch.nn.functional as F
 import torch.nn.utils
 import torch.optim as optim
 import torch.utils.data
-from torchvision import transforms
+from torch.utils.data.sampler import SubsetRandomSampler
 
 import dataStorage
 import config
 
 #this should stop some errors about too many files being open
-torch.multiprocessing.set_sharing_strategy('file_system')
+#torch.multiprocessing.set_sharing_strategy('file_system')
 
 amp_handle = amp.init()
 
@@ -45,22 +45,88 @@ def tokenToTensor(x):
             numberMap[str(i)] = numToBinary(i)
 
     if x in numberMap:
-        return torch.tensor([hash(x), *numberMap[x]])
+        return torch.tensor([hash(x) % config.vocabSize, *numberMap[x]])
     else:
-        return torch.tensor([hash(x), *numberMap['0']])
+        return torch.tensor([hash(x) % config.vocabSize, *numberMap['0']])
 
 #formats the infoset so it can be processed by the network
 #this is how infosets should be stored
 def infosetToTensor(infoset):
-    #if type(infoset[0]) == list:
-        #return [torch.stack([tokenToTensor(token) for token in seq]) for seq in infoset]
     return torch.stack([tokenToTensor(token) for token in infoset])
 
+class SimpleNet(nn.Module):
+    def __init__(self, softmax=False):
+        super(Net, self).__init__()
+        self.outputSize = config.game.numActions
+        self.softmax = softmax
+        self.inputSize = 15
+        dropout = 0.5
+        self.embeddings = HashEmbedding(config.vocabSize, config.embedSize, append_weight=False, mask_zero=True)
+        self.dropE = nn.Dropout(dropout)
+
+        #simple feed forward for final part
+        self.fc1 = nn.Linear(self.inputSize * (config.embedSize + config.numTokenBits), config.width)
+        self.drop1 = nn.Dropout(dropout)
+        self.fc2 = nn.Linear(config.width, config.width)
+        self.drop2 = nn.Dropout(dropout)
+        self.fc3 = nn.Linear(config.width, config.width)
+        self.drop3 = nn.Dropout(dropout)
+        self.fc6 = nn.Linear(config.width, self.outputSize)
+
+
+    def forward(self, infoset, lengths=None, trace=False):
+        #I'm trying to be pretty aggressive about deleting things
+        #as it's easy to run out of gpu memory with large sequences
+
+        isSingle = False
+        if len(infoset.shape) == 2:
+            isSingle = True
+            infoset = infoset[None, :, :]
+
+        #embed the word hash, which is the first element
+        if trace:
+            print('infoset', infoset, file=sys.stderr)
+        embedded = self.embeddings(infoset[:,:,0])
+        if trace:
+            print('embedded', embedded, file=sys.stderr)
+
+        #embedding seems to spit out some pretty low-magnitude vectors
+        #so let's try normalizing
+        #embedded = F.normalize(embedded, p=2, dim=2)
+        #embedded = self.dropout(embedded)
+        #replace the hash with the embedded vector
+        embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
+        del infoset
+
+        x = F.pad(embedded, (0,0, 0,self.inputSize - embedded.shape[1]))
+        x = torch.cat(tuple(x.transpose(0,1)), 1)
+        x = self.dropE(x)
+
+        x = F.relu(self.fc1(x))
+        x = self.drop1(x)
+        #2 and 3 have skip connections, as they have the same sized input and output
+        x = F.relu(self.fc2(x) + x)
+        x = self.drop2(x)
+        #x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x) + x)
+        x = self.drop3(x)
+        #x = F.relu(self.fc3(x))
+        #deep cfr does normalization here
+        #I'm not sure if this is the right kind of normalization
+        #x = F.normalize(x, p=2, dim=1)
+        x = self.fc6(x)
+
+        if self.softmax:
+            x = F.softmax(x, dim=1)
+
+        if isSingle:
+            return x[0]
+        else:
+            return x
+
+
 #model of the network
-class Net(nn.Module):
-    #embed size is how large our embedding output is
-    #lstmSize is the size of the lstm hidden output
-    #width is the size of the feedforward layers
+class LstmNet(nn.Module):
     #softmax is whether we softmax the final output
     def __init__(self, softmax=False):
         super(Net, self).__init__()
@@ -71,19 +137,50 @@ class Net(nn.Module):
         self.embedSize = config.embedSize
 
         #turn vocab indices from history into embedding vectors
-        #self.embeddings = nn.Embedding(self.vocabSize, embedSize)
-        self.embeddings = HashEmbedding(config.vocabSize, self.embedSize, append_weight=False, mask_zero=False)
+        self.embeddings = HashEmbedding(config.vocabSize, self.embedSize, append_weight=False, mask_zero=True)
+        #self.embeddings = nn.Embedding(config.vocabSize, self.embedSize)
 
         self.dropout = nn.Dropout(config.embedDropoutPercent)
 
+        """
+        convLayers = []
+        convBatchNorms = []
+        for i, depth in enumerate(config.convDepths):
+            convs = []
+            convsBn = []
+            for j in range(depth):
+                if i == 0 and j == 0:
+                    #input from embedding
+                    inputSize = config.embedSize + config.numTokenBits
+                elif j == 0:
+                    #input from previous layer
+                    inputSize = config.convSizes[i-1]
+                else:
+                    #input from current layer
+                    inputSize = config.convSizes[i]
+                #TODO make the stride configurable per layer so we can reduce the sequence length
+                k = config.kernelSizes[i]
+                p = k + 1 // 2
+                conv = nn.Conv1d(inputSize, config.convSizes[i], kernel_size=k, stride=1, padding=p)
+                convs.append(conv)
+                convsBn.append(nn.BatchNorm1d(config.convSizes[i]))
+            convLayers.append(nn.ModuleList(convs))
+            convBatchNorms.append(nn.ModuleList(convsBn))
+        self.convLayers = nn.ModuleList(convLayers)
+        self.convBatchNorms = nn.ModuleList(convBatchNorms)
+        """
+
         #LSTM to process infoset via the embeddings
-        self.lstm = nn.LSTM(self.embedSize + NUM_TOKEN_BITS, config.lstmSize, num_layers=config.numLstmLayers, batch_first=True)
+        #self.lstm = nn.LSTM(config.convSizes[-1], config.lstmSize, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, batch_first=True)
+        self.lstm = nn.LSTM(config.embedSize + config.numTokenBits, config.lstmSize, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, batch_first=True)
 
         #attention
         self.attn = nn.Linear(2 * config.lstmSize, config.lstmSize)
+        self.attn2 = nn.Linear(config.lstmSize, config.lstmSize)
 
         #simple feed forward for final part
         self.fc1 = nn.Linear(config.lstmSize, config.width)
+        #self.fc1 = nn.Linear(config.convSizes[-1], config.width)
         self.fc2 = nn.Linear(config.width, config.width)
         self.fc3 = nn.Linear(config.width, config.width)
         self.fc6 = nn.Linear(config.width, self.outputSize)
@@ -106,29 +203,58 @@ class Net(nn.Module):
 
         #embedding seems to spit out some pretty low-magnitude vectors
         #so let's try normalizing
-        embedded = F.normalize(embedded, p=2, dim=2)
+        #embedded = F.normalize(embedded, p=2, dim=2)
         embedded = self.dropout(embedded)
         #replace the hash with the embedded vector
         embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
         del infoset
 
+        """
+        x = torch.transpose(embedded, 1, 2)
+        for i, convs in enumerate(self.convLayers):
+            for j, conv in enumerate(convs):
+                x = conv(x)
+                x = self.convBatchNorms[i][j](x)
+                x = F.relu(x)
+            kernelSize = min(max(1, x.shape[2] // config.poolSizes[i]), x.shape[2])
+            x = F.max_pool1d(x, kernelSize)
+
+        x = torch.transpose(x, 1, 2)
+        #x = x.squeeze(2)
+
+        #with convolutions, the lengths of the sequences are going to be messed up anyway
+        #so it's probably fine to just take all sequences in a batch to be the same length
+        """
+
+        #"""
         #lengths are passed in if we have to worry about padding
         #https://towardsdatascience.com/taming-lstms-variable-sized-mini-batches-and-why-pytorch-is-good-for-your-health-61d35642972e
         if lengths is not None:
             lstmInput = torch.nn.utils.rnn.pack_padded_sequence(embedded, lengths, batch_first=True)
         else:
             lstmInput = embedded
+        #"""
 
         #remember that we set batch_first to be true
+        #"""
         x, _ = self.lstm(lstmInput)
+        #"""
+        """
+        x, _ = self.lstm(x)
+        """
 
         #get the final output of the lstm
+        #"""
         if lengths is not None:
             #have to account for padding/packing
             x, lengths = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
             lasts = x[torch.arange(0, x.shape[0]), lengths-1]
         else:
             lasts = x[:,-1]
+        #"""
+        """
+        lasts = x[:,-1]
+        """
 
         if trace:
             print('lasts', lasts, file=sys.stderr)
@@ -139,7 +265,8 @@ class Net(nn.Module):
         lasts = lasts.repeat(1, x.shape[1], 1)
         #feed the output of the lstm appended with the final output to the attention layer
         xWithContext = torch.cat([x, lasts], 2)
-        outattn = self.attn(xWithContext)
+        outattn = F.relu(self.attn(xWithContext))
+        outattn = self.attn2(outattn)
         #softmax so the weights for each element of each output add up to 1
         outattn = F.softmax(outattn, dim=1)
         #apply the weights to each output
@@ -155,7 +282,9 @@ class Net(nn.Module):
         x = F.relu(self.fc1(x))
         #2 and 3 have skip connections, as they have the same sized input and output
         x = F.relu(self.fc2(x) + x)
+        #x = F.relu(self.fc2(x))
         x = F.relu(self.fc3(x) + x)
+        #x = F.relu(self.fc3(x))
         #deep cfr does normalization here
         #I'm not sure if this is the right kind of normalization
         #x = F.normalize(x, p=2, dim=1)
@@ -168,6 +297,9 @@ class Net(nn.Module):
             return x[0]
         else:
             return x
+
+Net = LstmNet
+#Net = SimpleNet
 
 class DeepCfrModel:
 
@@ -188,9 +320,10 @@ class DeepCfrModel:
         self.outputSize = config.game.numActions
 
         self.net = Net(softmax=softmax)
-        self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
-        #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=5, verbose=True)
+        #self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+        self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
+        self.patience = 10
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
 
         #cache of (infoset tensor, label tensor, iteration) tuples
         #will eventually be put in training db
@@ -235,6 +368,7 @@ class DeepCfrModel:
     def predict(self, infoset, trace=False):
         data = infosetToTensor(infoset)
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        #device = torch.device('cpu')
         self.net = self.net.to(device)
         data = data.to(device)
         return self.net(data, trace=trace).cpu().detach().numpy()
@@ -251,9 +385,9 @@ class DeepCfrModel:
 
 
         self.net = self.net.to(device)
-        self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
-        #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=5, verbose=True)
+        #self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+        self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
+        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
         miniBatchSize = config.miniBatchSize
         self.net.train(True)
 
@@ -281,20 +415,38 @@ class DeepCfrModel:
 
             return padded, lengths, labels, iters
 
+        lowestLoss = 999
+        lowestLossIndex =  -1
+
+        print(file=sys.stderr)
         for j in range(epochs):
             if epochs > 1:
-                print('epoch', j, file=sys.stderr)
+                print('\repoch', j, end=' ', file=sys.stderr)
             dataset = dataStorage.Dataset(self.name, self.sharedDict, self.outputSize)
-            loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=True, num_workers=config.numWorkers, pin_memory=True, collate_fn=myCollate)
 
-            print('dataset size:', dataset.size, file=sys.stderr)
+            #validation split based on 
+            #https://stackoverflow.com/questions/50544730/how-do-i-split-a-custom-dataset-into-training-and-test-datasets
+            valSplit = 0.1
+            indices = list(range(dataset.size))
+            split = int(np.floor(valSplit * min(dataset.size, config.epochMaxNumSamples)))
+            np.random.shuffle(indices)
+            trainIndices, testIndices = indices[split:min(dataset.size, config.epochMaxNumSamples)], indices[:split]
+            trainSampler = SubsetRandomSampler(trainIndices)
+            testSampler = SubsetRandomSampler(testIndices)
+
+            loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=False, num_workers=config.numWorkers, pin_memory=False, collate_fn=myCollate, sampler=trainSampler)
+            testLoader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=False, num_workers=config.numWorkers, pin_memory=False, collate_fn=myCollate, sampler=testSampler)
+
+            if j == 0:
+                print('training size:', len(trainIndices), 'val size:', len(testIndices), file=sys.stderr)
 
             totalLoss = 0
 
-            #print out loss every 1/10th of an epoch
-            i = 0
+            i = 1
+            sampleCount = 0
             chunkSize = dataset.size  / (miniBatchSize * 10)
             for data, dataLengths, labels, iters in loader:
+                sampleCount += dataLengths.shape[0]
                 i += 1
 
                 labels = labels.float().to(device)
@@ -305,32 +457,79 @@ class DeepCfrModel:
                 #evaluate on network
                 self.optimizer.zero_grad()
                 ys = self.net(data, lengths=dataLengths, trace=False)
-                #print('------------', file=sys.stderr)
-                #print('ys', ys, file=sys.stderr)
-                #print('labels', labels, file=sys.stderr)
-                #print('iters', iters, file=sys.stderr)
-                #print('scaled loss', iters.view(labels.shape[0],-1) * ((labels - ys) ** 2), file=sys.stderr)
 
                 #loss function from the paper
-                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))
-                del ys
+                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))# / labels.shape[0]
+                #if i % 10 == 0:
+                    #print('----------', file=sys.stderr)
+                    #print('iters', iters, file=sys.stderr)
+                    #print('infosets', data, file=sys.stderr)
+                    #print('ys', ys, file=sys.stderr)
+                    #print('labels', labels, file=sys.stderr)
 
                 #get gradient of loss
                 #use amp because nvidia said it's better
                 with amp_handle.scale_loss(loss, self.optimizer) as scaled_loss:
                     scaled_loss.backward()
+                #loss.backward()
 
 
                 #clip gradient norm, which was done in the paper
-                nn.utils.clip_grad_norm_(self.net.parameters(), 1000)
+                nn.utils.clip_grad_norm_(self.net.parameters(), 1)
 
                 #train the network
                 self.optimizer.step()
                 totalLoss += loss.item()
 
-            avgLoss = totalLoss / dataset.size
-            #self.scheduler.step(avgLoss)
-            print('avgLoss', avgLoss, file=sys.stderr)
+            avgLoss = totalLoss / sampleCount
+            with open('trainloss.csv', 'a') as file:
+                print(avgLoss, end=',', file=file)
+
+            #get validation loss
+            self.net.train(False)
+            totalValLoss = 0
+            valCount = 0
+            for data, dataLengths, labels, iters in testLoader:
+                labels = labels.float().to(device)
+                iters = iters.float().to(device)
+                data = data.long().to(device)
+                dataLengths = dataLengths.long().to(device)
+                ys = self.net(data, lengths=dataLengths, trace=False)
+                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))# / labels.shape[0]
+                totalValLoss += loss.item()
+                valCount += dataLengths.shape[0]
+
+            self.net.train(True)
+
+            avgValLoss = totalValLoss / valCount
+
+            #we could use training loss
+            schedLoss = avgValLoss
+
+            if config.useScheduler:
+                self.scheduler.step(schedLoss)
+
+            if schedLoss < lowestLoss:
+                lowestLoss = schedLoss
+                lowestLossIndex = j
+
+            if j - lowestLossIndex > 50:#avoid saddle points
+                #self.optimizer = optim.Adam(self.net.parameters(), lr=config.learnRate)
+                self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
+                self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
+
+
+
+            #show in console and output to csv
+            print('val Loss', avgValLoss, end='', file=sys.stderr)
+            with open('valloss.csv', 'a') as file:
+                print(totalValLoss / valCount, end=',', file=file)
+
+        with open('valloss.csv', 'a') as file:
+            print(file=file)
+        with open('trainloss.csv', 'a') as file:
+            print(file=file)
+        print('\n', file=sys.stderr)
 
         self.net.train(False)
 

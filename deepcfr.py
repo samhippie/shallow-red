@@ -92,7 +92,7 @@ class DeepCfrAgent:
 
             #this is mainly used for setting a condition breakpoint
             #there's probably a better way
-            #if i > 5:
+            #if i == 5:
                 #print('ready for debugging')
 
             #for self.small games, this is necessary to get a decent number of samples
@@ -124,10 +124,14 @@ class DeepCfrAgent:
                     self.advTrain(i % 2)
                 if self.manageSharedModels:
                     self.sharedDict['advNet' + str(i % 2)] = self.advModels[i % 2].net
+                else:
+                    self.advModels[i % 2].shareMemory()
             self.trainingBarrier.wait()
             #broadcast the new network back out
             if self.manageSharedModels:
                 self.advModels[i % 2].net = self.sharedDict['advNet' + str(i % 2)]
+            #else:
+                #self.advModels[i % 2].shareMemory()
             self.needsTraining = False
 
             if self.pid == 0:
@@ -174,7 +178,7 @@ class DeepCfrAgent:
     #recursive implementation of cfr
     #history is a list of (seed, player, action) tuples
     #assumes the game has already had the history applied
-    async def cfrRecur(self, context, game, startSeed, history, iter, depth=0, rollout=False):
+    async def cfrRecur(self, context, game, startSeed, history, iter, depth=0, q=1, rollout=False):
         if config.depthLimit and depth > config.depthLimit:
             rollout = True
 
@@ -185,23 +189,24 @@ class DeepCfrAgent:
 
         if 'win' in req:
             if player == onPlayer:
-                return req['win']
+                return (req['win'] + 2) / 4
             else:
-                return -1 * req['win']
+                return (-1 * req['win'] + 2) / 4
 
         #game uses append, so we have to make a copy to keep everything consistent when we get advantages later
         infoset = copy.copy(game.getInfoset(player))
 
         if player == offPlayer:
             #get probs so we can sample a single action
-            probs = self.regretMatch(offPlayer, infoset, actions, -1)
-            action = np.random.choice(actions, p=probs)
+            probs, _ = self.regretMatch(offPlayer, infoset, actions, -1)
+            exploreProbs = probs * (1 - config.exploreRate) + config.exploreRate / len(actions)
+            action = np.random.choice(actions, p=exploreProbs)
             #save sample for final average strategy
             if not rollout:
                 self.updateProbs(offPlayer, infoset, actions, probs, iter // 2 + 1)
 
-            #if depth == 0 and self.pid == 0:
-                #print('player ' + str(player) + ' probs', list(zip(actions, probs)), file=sys.stderr)
+            if depth == 1 and self.pid == 0:
+                print('offplayer ' + str(player) + ' hand ' + str(game.hands[player]) + ' probs', list(zip(actions, probs)), file=sys.stderr)
             await game.takeAction(player, req, action)
 
             if player == 0:
@@ -209,13 +214,13 @@ class DeepCfrAgent:
             else:
                 newHistory = [history[0], history[1] + [(None, action)]]
 
-            return await self.cfrRecur(context, game, startSeed, newHistory, iter, depth, rollout)
+            return await self.cfrRecur(context, game, startSeed, newHistory, iter, depth=depth, rollout=rollout, q=q)
 
         elif player == onPlayer:
             #get probs, which action we take depends on the configuration
-            probs = self.regretMatch(onPlayer, infoset, actions, depth)
-            #if depth == 0 and self.pid == 0:
-                #print('player ' + str(onPlayer) + ' probs', list(zip(actions, probs)), file=sys.stderr)
+            probs, regrets = self.regretMatch(onPlayer, infoset, actions, depth)
+            if depth == 1 and self.pid == 0:
+                print('onplayer ' + str(player) + ' hand ' + str(game.hands[player]) + ' probs', list(zip(actions, probs)), 'advs', regrets, file=sys.stderr)
             if rollout:
                 #we pick one action according to the current strategy
                 actions = [np.random.choice(actions, p=probs)]
@@ -262,15 +267,23 @@ class DeepCfrAgent:
                 else:
                     newHistory = [history[0], history[1] + [(None, action)]]
 
-                r = await self.cfrRecur(context, game, startSeed, newHistory, iter, depth=depth+1, rollout=curRollout)
+                r = await self.cfrRecur(context, game, startSeed, newHistory, iter, depth=depth+1, rollout=curRollout, q=q*probs[i])
                 rewards.append(r)
 
+            if self.verbose:
+                print('infoset', infoset)
+                print('actions, probs, and rewards', list(zip(actions, probs, rewards)))
             if not rollout:
                 #save sample of advantages
                 stateExpValue = 0
                 for p,r in zip(probs, rewards):
                     stateExpValue += p * r
                 advantages = [r - stateExpValue for r in rewards]
+                #CFR+, anyone?
+                #also using the sqrt(t) equation from that double neural cfr paper
+                #advantages = [math.sqrt(iter // 2) * g / math.sqrt(iter // 2 + 1) + (r - stateExpValue) / math.sqrt(iter // 2 + 1) for r, g in zip(rewards, regrets)]
+                if depth == 1 and self.pid == 0:
+                    print('onplayer', player, 'hand', game.hands[player], 'new advs', list(zip(actions, advantages)), 'exp value', stateExpValue, file=sys.stderr)
                 #print('advantages', advantages)
 
                 am = self.advModels[onPlayer]
@@ -302,7 +315,7 @@ class DeepCfrAgent:
         probs = np.array(probs)
         pSum = np.sum(probs)
         if pSum > 0:
-            return probs / pSum
+            return probs / pSum, advs
         else:
             #pick the best action with probability 1
             best = None
@@ -312,7 +325,11 @@ class DeepCfrAgent:
                     best = i
             probs = [0 for a in actions]
             probs[best] = 1
-            return np.array(probs)
+            return np.array(probs), advs
+            #actually, play randomly
+            """
+            return np.array([1 / len(actions) for a in actions]), advs
+            """
 
     #adds sample of current strategy
     def updateProbs(self, player, infoset, actions, probs, iter):

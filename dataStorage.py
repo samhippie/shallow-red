@@ -29,6 +29,8 @@ BIG_CACHE = config.bigCache
 #does not delete the folder itself
 def clearData():
     os.system('rm -r ' + DATA_DIR + '*')
+    os.system('rm valloss.csv')
+    os.system('rm trainloss.csv')
 
 #lock is a multiprocess manager lock
 #id determines which dataset the samples belong to

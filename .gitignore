@@ -6,3 +6,4 @@ cg-run.sh
 *.pickle
 data/*
 *.prof
+*.csv
