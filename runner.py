@@ -16,6 +16,7 @@ import torch.multiprocessing as mp
 import config
 import deepcfr
 import model
+import trashModel
 
 
 #This file has functions relating to running the AI
@@ -33,8 +34,9 @@ async def trainAndPlay(file=sys.stdout):
 
     sharedDict = m.dict()
 
-    advModels = [model.DeepCfrModel(name='adv' + str(i), softmax=False, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
-    stratModels = [model.DeepCfrModel(name='strat' + str(i), softmax=True, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
+    #advModels = [model.DeepCfrModel(name='adv' + str(i), softmax=False, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
+    stratModels = [trashModel.DeepCfrModel(name='strat' + str(i), softmax=True, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
+    advModels = [trashModel.DeepCfrModel(name='adv' + str(i), softmax=False, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
 
     for i in range(2):
         advModels[i].shareMemory()
@@ -46,6 +48,7 @@ async def trainAndPlay(file=sys.stdout):
             sharedDict=sharedDict,
             advModels=advModels,
             stratModels=stratModels,
+            singleDeep=config.singleDeep,
             verbose=config.verboseTraining)
 
     #for debugging, as multiprocessing makes debugging difficult
@@ -89,6 +92,7 @@ async def trainAndPlay(file=sys.stdout):
     #we could have the agent do this when it's done training,
     #but I don't like having the agent worry about its own synchronization
     agent.stratTrain()
+    print('final old model weights?', agent.oldModelWeights)
 
     async with config.game.getContext() as context:
         #this needs to be a coroutine so we can cancel it when the game ends

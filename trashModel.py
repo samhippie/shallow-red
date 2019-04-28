@@ -3,6 +3,7 @@
 from apex import amp
 from hashembed.embedding import HashEmbedding
 import io
+import math
 import numpy as np
 import sys
 import torch
@@ -13,12 +14,13 @@ import torch.nn.utils
 import torch.optim as optim
 import torch.utils.data
 from torch.utils.data.sampler import SubsetRandomSampler
+import torchvision.transforms as transforms
 
 import dataStorage
 import config
 
-#this should stop some errors about too many files being open
-#torch.multiprocessing.set_sharing_strategy('file_system')
+#this is kind of like the normal model, except we don't maintain a constant pool of samples
+#we throw old data away between iterations
 
 amp_handle = amp.init()
 
@@ -54,13 +56,26 @@ def tokenToTensor(x):
 def infosetToTensor(infoset):
     return torch.stack([tokenToTensor(token) for token in infoset])
 
+def batchNorm(x):
+    if x.shape[0] == 1:
+        return x
+    #this is normalizing to zero mean, unit variance
+    mean = torch.mean(x, dim=0)
+    x = x - mean.unsqueeze(0).repeat(x.shape[0], 1)
+    std = torch.std(x, dim=0)
+    #if a std is 0, then the mean is also 0, so there's nothing we can do except pass 0 along via 0 / 0.01
+    #and this operation is much simpler than trying to only change the 0 values
+    std = std + torch.Tensor([0.00001]).repeat(std.shape[0]).cuda()
+    x = x / std.unsqueeze(0).repeat(x.shape[0], 1)
+    return x
+
 class SimpleNet(nn.Module):
     def __init__(self, softmax=False):
         super(Net, self).__init__()
         self.outputSize = config.game.numActions
         self.softmax = softmax
         self.inputSize = 15
-        dropout = 0.5
+        dropout = 0
         self.embeddings = HashEmbedding(config.vocabSize, config.embedSize, append_weight=False, mask_zero=True)
         self.dropE = nn.Dropout(dropout)
 
@@ -71,7 +86,12 @@ class SimpleNet(nn.Module):
         self.drop2 = nn.Dropout(dropout)
         self.fc3 = nn.Linear(config.width, config.width)
         self.drop3 = nn.Dropout(dropout)
+
         self.fc6 = nn.Linear(config.width, self.outputSize)
+
+        self.fcVal1 = nn.Linear(config.width, config.width)
+        self.fcVal2 = nn.Linear(config.width, config.width)
+        self.fcValOut = nn.Linear(config.width, 1)
 
 
     def forward(self, infoset, lengths=None, trace=False):
@@ -87,13 +107,15 @@ class SimpleNet(nn.Module):
         if trace:
             print('infoset', infoset, file=sys.stderr)
         embedded = self.embeddings(infoset[:,:,0])
-        if trace:
-            print('embedded', embedded, file=sys.stderr)
 
         #embedding seems to spit out some pretty low-magnitude vectors
         #so let's try normalizing
-        #embedded = F.normalize(embedded, p=2, dim=2)
-        #embedded = self.dropout(embedded)
+        embedded = F.normalize(embedded, p=2, dim=2)
+
+        if trace:
+            print('embedded', embedded, file=sys.stderr)
+
+        #embedded = self.dropE(embedded)
         #replace the hash with the embedded vector
         embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
         del infoset
@@ -102,26 +124,56 @@ class SimpleNet(nn.Module):
         x = torch.cat(tuple(x.transpose(0,1)), 1)
         x = self.dropE(x)
 
+        if trace:
+            print('before first linear', x, file=sys.stderr)
+
         x = F.relu(self.fc1(x))
         x = self.drop1(x)
+
+        if trace:
+            print('before split', x, file=sys.stderr)
+
+        xVal = x
+
         #2 and 3 have skip connections, as they have the same sized input and output
-        x = F.relu(self.fc2(x) + x)
-        x = self.drop2(x)
+        x = F.relu(self.fc2(x))# + x)
         #x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x) + x)
-        x = self.drop3(x)
+        x = self.drop2(x)
+
+        x = F.relu(self.fc3(x))# + x)
         #x = F.relu(self.fc3(x))
+        x = self.drop3(x)
+
+        if trace:
+            print('pre norm', x, file=sys.stderr)
+
         #deep cfr does normalization here
-        #I'm not sure if this is the right kind of normalization
-        #x = F.normalize(x, p=2, dim=1)
+        #x = batchNorm(x)
+
+        if trace:
+            print('post norm', x, file=sys.stderr)
+
         x = self.fc6(x)
 
         if self.softmax:
             x = F.softmax(x, dim=1)
+        else:
+            pass
+            #x = torch.sigmoid(x)
+            #x = F.relu(x)
+
+        #value output
+        xVal = F.relu(self.fcVal1(xVal))# + xVal)
+        xVal = F.relu(self.fcVal2(xVal))# + xVal)
+        #xVal = torch.tanh(self.fcValOut(xVal))
+        #xVal = batchNorm(xVal)
+        xVal = self.fcValOut(xVal)
 
         if isSingle:
-            return x[0]
+            return torch.cat([x[0], xVal[0]])
         else:
+            x = torch.cat([x, xVal], dim=1)
+            #x = batchNorm(x)
             return x
 
 
@@ -202,12 +254,12 @@ class LstmNet(nn.Module):
         if trace:
             print('infoset', infoset, file=sys.stderr)
         embedded = self.embeddings(infoset[:,:,0])
+        #embedding seems to spit out some pretty low-magnitude vectors
+        #so let's try normalizing
+        embedded = F.normalize(embedded, p=2, dim=2)
         if trace:
             print('embedded', embedded, file=sys.stderr)
 
-        #embedding seems to spit out some pretty low-magnitude vectors
-        #so let's try normalizing
-        #embedded = F.normalize(embedded, p=2, dim=2)
         embedded = self.dropout(embedded)
         #replace the hash with the embedded vector
         embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
@@ -286,10 +338,10 @@ class LstmNet(nn.Module):
         xVal = x
         x = F.relu(self.fc1(x))
         #2 and 3 have skip connections, as they have the same sized input and output
-        x = F.relu(self.fc2(x) + x)
-        #x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x) + x)
-        #x = F.relu(self.fc3(x))
+        #x = F.relu(self.fc2(x) + x)
+        x = F.relu(self.fc2(x))
+        #x = F.relu(self.fc3(x) + x)
+        x = F.relu(self.fc3(x))
         #deep cfr does normalization here
         #I'm not sure if this is the right kind of normalization
         #x = F.normalize(x, p=2, dim=1)
@@ -309,8 +361,10 @@ class LstmNet(nn.Module):
             x = torch.cat([x, xVal], dim=1)
             return x
 
+
+
+
 Net = LstmNet
-#Net = SimpleNet
 
 class DeepCfrModel:
 
@@ -333,7 +387,6 @@ class DeepCfrModel:
         self.net = Net(softmax=softmax)
         #self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
         self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
-        self.patience = 10
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
 
         #cache of (infoset tensor, label tensor, iteration) tuples
@@ -346,15 +399,16 @@ class DeepCfrModel:
     def shareMemory(self):
         self.net.share_memory()
 
-    def addSample(self, infoset, label, iter):
+    def addSample(self, infoset, label, iter, expValue):
         #infosetTensor = np.array([hash(token) for token in infoset], dtype=np.long)
         infosetTensor = infosetToTensor(infoset)
 
-        labelTensor = np.zeros(self.outputSize)
+        labelTensor = np.zeros(self.outputSize + 1)
         for action, value in label:
             #print(action, value)
             n = config.game.enumAction(action)
             labelTensor[n] = value
+        labelTensor[-1] = expValue
         #print('saving label', labelTensor)
 
         iterTensor = np.array([iter])
@@ -382,7 +436,8 @@ class DeepCfrModel:
         #device = torch.device('cpu')
         self.net = self.net.to(device)
         data = data.to(device)
-        return self.net(data, trace=trace).cpu().detach().numpy()
+        data = self.net(data, trace=trace).cpu().detach().numpy()
+        return data[0:-1], data[-1]
 
     def train(self, epochs=1):
         #move from write cache to db
@@ -392,7 +447,11 @@ class DeepCfrModel:
         #device = torch.device('cpu')
 
         if config.newIterNets:
-            self.net = Net(softmax=self.softmax)
+            newNet = Net(softmax=self.softmax)
+            #embedding should be preserved across iterations
+            #but we want a fresh start for the strategy
+            newNet.embeddings = self.net.embeddings
+            self.net = newNet
 
 
         self.net = self.net.to(device)
@@ -429,22 +488,22 @@ class DeepCfrModel:
         lowestLoss = 999
         lowestLossIndex =  -1
 
+        dataset = dataStorage.Dataset(self.name, self.sharedDict, self.outputSize)
+
+        #validation split based on 
+        #https://stackoverflow.com/questions/50544730/how-do-i-split-a-custom-dataset-into-training-and-test-datasets
+        indices = list(range(dataset.size))
+        split = int(np.floor(config.valSplit * min(dataset.size, config.epochMaxNumSamples)))
+        np.random.shuffle(indices)
+        trainIndices, testIndices = indices[split:min(dataset.size, config.epochMaxNumSamples)], indices[:split]
+        trainSampler = SubsetRandomSampler(trainIndices)
+        testSampler = SubsetRandomSampler(testIndices)
+
         print(file=sys.stderr)
         for j in range(epochs):
             if epochs > 1:
                 print('\repoch', j, end=' ', file=sys.stderr)
-            dataset = dataStorage.Dataset(self.name, self.sharedDict, self.outputSize)
-
-            #validation split based on 
-            #https://stackoverflow.com/questions/50544730/how-do-i-split-a-custom-dataset-into-training-and-test-datasets
-            valSplit = 0.1
-            indices = list(range(dataset.size))
-            split = int(np.floor(valSplit * min(dataset.size, config.epochMaxNumSamples)))
-            np.random.shuffle(indices)
-            trainIndices, testIndices = indices[split:min(dataset.size, config.epochMaxNumSamples)], indices[:split]
-            trainSampler = SubsetRandomSampler(trainIndices)
-            testSampler = SubsetRandomSampler(testIndices)
-
+            
             loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=False, num_workers=config.numWorkers, pin_memory=False, collate_fn=myCollate, sampler=trainSampler)
             testLoader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=False, num_workers=config.numWorkers, pin_memory=False, collate_fn=myCollate, sampler=testSampler)
 
@@ -452,6 +511,7 @@ class DeepCfrModel:
                 print('training size:', len(trainIndices), 'val size:', len(testIndices), file=sys.stderr)
 
             totalLoss = 0
+            lossFunc = nn.MSELoss()
 
             i = 1
             sampleCount = 0
@@ -461,22 +521,38 @@ class DeepCfrModel:
                 i += 1
 
                 labels = labels.float().to(device)
+                #labels = batchNorm(labels)
                 iters = iters.float().to(device)
                 data = data.long().to(device)
                 dataLengths = dataLengths.long().to(device)
+                #print('------')
+                #print('data', data.squeeze(), file=sys.stderr)
+                #print('label', labels, file=sys.stderr)
+                #print('label exp values', labels[:, -1], file=sys.stderr)
+                #print('label exp values avg', labels[:, -1].mean(), file=sys.stderr)
+                #print('label exp values std', labels[:, -1].std(), file=sys.stderr)
 
                 #evaluate on network
                 self.optimizer.zero_grad()
                 ys = self.net(data, lengths=dataLengths, trace=False)
+                #print('ys', ys, file=sys.stderr)
+                #print('ys exp values', ys[:, -1], file=sys.stderr)
+                #print('ys exp values avg', ys[:, -1].mean(), file=sys.stderr)
+                #print('ys exp values std', ys[:, -1].std(), file=sys.stderr)
 
                 #loss function from the paper
                 loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))# / labels.shape[0]
-                #if i % 10 == 0:
-                    #print('----------', file=sys.stderr)
+                #loss = torch.sum((labels - ys) ** 2) / labels.shape[0]
+                #loss = lossFunc(ys, labels)
+                #print('loss', loss)
+                """
+                if i % 1 == 0:
+                    print('----------', file=sys.stderr)
                     #print('iters', iters, file=sys.stderr)
-                    #print('infosets', data, file=sys.stderr)
-                    #print('ys', ys, file=sys.stderr)
-                    #print('labels', labels, file=sys.stderr)
+                    print('infosets', data, file=sys.stderr)
+                    print('ys', torch.round(ys * 100) / 100, file=sys.stderr)
+                    print('labels', torch.round(labels * 100) / 100, file=sys.stderr)
+                """
 
                 #get gradient of loss
                 #use amp because nvidia said it's better
@@ -486,11 +562,12 @@ class DeepCfrModel:
 
 
                 #clip gradient norm, which was done in the paper
-                nn.utils.clip_grad_norm_(self.net.parameters(), 1)
+                nn.utils.clip_grad_norm_(self.net.parameters(), 5)
 
                 #train the network
                 self.optimizer.step()
                 totalLoss += loss.item()
+
 
             avgLoss = totalLoss / sampleCount
             with open('trainloss.csv', 'a') as file:
@@ -502,10 +579,12 @@ class DeepCfrModel:
             valCount = 0
             for data, dataLengths, labels, iters in testLoader:
                 labels = labels.float().to(device)
+                #print('labels', np.round(100 * labels.cpu().numpy()) / 100, file=sys.stderr)
                 iters = iters.float().to(device)
                 data = data.long().to(device)
                 dataLengths = dataLengths.long().to(device)
                 ys = self.net(data, lengths=dataLengths, trace=False)
+                #print('ys', np.round(100 * ys.cpu().detach().numpy()) / 100, file=sys.stderr)
                 loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))# / labels.shape[0]
                 totalValLoss += loss.item()
                 valCount += dataLengths.shape[0]
@@ -543,27 +622,35 @@ class DeepCfrModel:
         print('\n', file=sys.stderr)
 
         self.net.train(False)
+        exampleInfoSets = [
+            ['start', 'hand', '2', '0', 'deal', '1', 'raise'],
+            ['start', 'hand', '9', '0', 'deal', '1', 'raise'],
+            ['start', 'hand', '14', '0', 'deal', '1', 'raise'],
+        ]
+        for example in exampleInfoSets:
+            print('example input:', example, file=sys.stderr)
+            probs, expVal = self.predict(example, trace=False)
+            print('exampleOutput (deal, fold, call, raise)', np.round(100 * probs), 'exp value', round(expVal * 100), file=sys.stderr)
 
-def netTest():
-    net = Net()
-    list1 = infosetToTensor(['a', 'b', 'c'])
-    list2 = infosetToTensor(['d', 'e', 'f'])
-    list3 = infosetToTensor(['g', 'h'])
-    #simple test
-    out1 = net.forward(list1)
-    out2 = net.forward(list2)
-    print('simple1', out1)
-    print('simple2', out2)
-    #batch test
-    out = net.forward([
-        list1,
-        list2,
-    ])
-    print('batch', out)
-    #multi length batch test
-    out = net.forward([
-        list3,
-        list1,
-        list3,
-    ])
-    print('multi length batch', out)
+        #ace example
+        """
+        target = infosetToTensor(exampleInfoSets[2]).squeeze()
+        count = 0
+        total = None
+        for i in range(len(dataset)):
+            infoset, label, iter = dataset[i]
+            infoset = infoset.squeeze()
+            if infoset.shape[0] == target.shape[0] and torch.all(torch.eq(infoset, target)):
+                print(label, file=sys.stderr)
+                if count == 0:
+                    total = label
+                else:
+                    total = total + label
+                count += 1
+        if count > 0:
+            print('average', total / count)
+            input("PRESS ENTER (this will work or crash, either is fine)")
+        """
+
+        #clean old data out
+        #dataStorage.clearSamplesByName(self.name)

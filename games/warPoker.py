@@ -80,7 +80,7 @@ class Game:
             self.random = random.Random(seed)
         else:
             self.random = random.Random()
-        self.deck = list(range(13))
+        self.deck = list(range(2, 15))#offset of 2 because cards start at 2
         self.file = file
 
         #this won't get set properly until the history is applied
@@ -135,7 +135,8 @@ class Game:
             if self.verbose:
                 print('winner:', self._winner, 'winnings:', '$' + str(winnings), file=self.file)
             self.winner.set_result((self._winner, winnings))
-            return (self._winner, {'win': winnings}, [])
+            #normalize winnings to between -1 and 1
+            return (self._winner, {'win': winnings / 2}, [])
 
         if self.state in [_Game.P1_DEAL, _Game.P1_RAISE]:
             player = (self.dealer + 1) % 2

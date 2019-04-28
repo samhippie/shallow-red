@@ -32,6 +32,28 @@ def clearData():
     os.system('rm valloss.csv')
     os.system('rm trainloss.csv')
 
+#deletes data belonging to a certain name
+def clearSamplesByName(name):
+    #remove the entry in index
+    if os.path.exists(DATA_DIR + 'index'):
+        target = -1
+        #find the line
+        with open(DATA_DIR + 'index', 'r') as file:
+            lines = list(file.readlines())
+            for i in range(len(lines)):
+                if lines[i].split(',')[0] == name:
+                    target = i
+                    break
+        #write out all lines except the targeted one
+        if target != -1:
+            del lines[i]
+            with open(DATA_DIR + 'index', 'w') as file:
+                for line in lines:
+                    print(line, file=file, end='')
+
+    #delete the data files
+    os.system('rm -r ' + DATA_DIR + name + '/*')
+
 #lock is a multiprocess manager lock
 #id determines which dataset the samples belong to
 #samples is a list of numpy arrays
