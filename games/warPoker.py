@@ -73,7 +73,7 @@ def getSeed():
 
 
 class Game:
-    def __init__(self, context=None, history=[[],[]], seed=None, verbose=False, file=sys.stdout):
+    def __init__(self, context=None, history=[[],[]], seed=None, saveTrajectories=False, verbose=False, file=sys.stdout):
         self.history = history
         self.seed = seed
         if seed:
@@ -82,6 +82,7 @@ class Game:
             self.random = random.Random()
         self.deck = list(range(2, 15))#offset of 2 because cards start at 2
         self.file = file
+        self.saveTrajectories = saveTrajectories
 
         #this won't get set properly until the history is applied
         self.dealer = 0
@@ -95,6 +96,11 @@ class Game:
         loop = asyncio.get_event_loop()
         self.winner = loop.create_future()
         self._winner = None
+
+        if self.saveTrajectories:
+            #list of (infoset, action)
+            #for each player
+            self.prevTrajectories = [[],[]]
 
         self.verbose = verbose
         self.infosets = [['start'],['start']]
@@ -158,6 +164,8 @@ class Game:
             print('state', self.state)
             print('player', player+1, 'takes action', action, file=self.file)
             print('bet:', self.bet, 'pot', self.pot, file=self.file)
+        if self.saveTrajectories:
+            self.prevTrajectories[player].append((copy.copy(self.infosets[player]), action))
         #all actions are public
         for i in range(2):
             #infosets are always in first person

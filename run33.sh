@@ -1,0 +1,34 @@
+time xargs -P 32 -I {} sh -c 'eval "$1"' - {} <<'EOF'
+./main.py 33 1
+./main.py 33 2
+./main.py 33 3
+./main.py 33 4
+./main.py 33 5
+./main.py 33 6
+./main.py 33 7
+./main.py 33 8
+./main.py 33 9
+./main.py 33 10
+./main.py 33 11
+./main.py 33 12
+./main.py 33 13
+./main.py 33 14
+./main.py 33 15
+./main.py 33 16
+./main.py 33 17
+./main.py 33 18
+./main.py 33 19
+./main.py 33 20
+./main.py 33 21
+./main.py 33 22
+./main.py 33 23
+./main.py 33 24
+./main.py 33 25
+./main.py 33 26
+./main.py 33 27
+./main.py 33 28
+./main.py 33 29
+./main.py 33 30
+./main.py 33 31
+./main.py 33 32
+EOF

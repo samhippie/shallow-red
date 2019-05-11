@@ -43,15 +43,15 @@ if gameName == 'warPoker':
     #search
     #number of search processes (limited by cpu utilization and gpu memory)
     #set to 0 to run search in main thread (mainly for debugging)
-    numProcesses = 0
+    numProcesses = 10
     #number of search iterations
-    limit = 20
+    limit = 100
     #seed for all search games, None for default
     seed = None
     #which search iteration to start from, None for fresh start (delete data)
     resumeIter = None
     #number of game tree traversals per search iteration
-    innerLoops = 100#0
+    innerLoops = 100
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still probed via rollout)
     branchingLimit = None
@@ -66,11 +66,11 @@ if gameName == 'warPoker':
     #number of epochs for training the strategy network
     stratEpochs = 5
     #maximum number of samples in an epoch
-    epochMaxNumSamples = 10000
+    epochMaxNumSamples = 100000
     #number of samples in a batch
-    miniBatchSize = 1
+    miniBatchSize = 4096
     #number of workers for the data loader
-    numWorkers = 4
+    numWorkers = 8
     #whether to create a fresh advantage network for each iteration
     newIterNets = True
     singleDeep = True
@@ -81,7 +81,7 @@ if gameName == 'warPoker':
     #maximum size for infoset vocabulary
     vocabSize = 128
     #size of embedding vector
-    embedSize = 32
+    embedSize = 8
     #dropout rate after embedding during training
     embedDropoutPercent = 0
     #output size of convolutions
@@ -93,7 +93,7 @@ if gameName == 'warPoker':
     #list of (approximate) pooling output sizes (which determines the kernel size)
     poolSizes = [13, 5]
     #size of hidden state of the lstm
-    lstmSize = 16
+    lstmSize = 32
     #number of lstm layers
     numLstmLayers = 1
     #dropout percentage for the lstm
@@ -104,7 +104,7 @@ if gameName == 'warPoker':
     #learn rate for training
     learnRate = 0.001
     #whether to use a scheduler for the learning rate
-    useScheduler = False
+    useScheduler = True
     #the patience of the schedule (# of epochs before reducing learn rate)
     schedulerPatience = 10
     #what factor to use to reduce the learn rate

@@ -7,6 +7,8 @@ import math
 import numpy as np
 import random
 import sys
+import torch
+import torch.distributed as dist
 
 import config
 import model
@@ -18,8 +20,8 @@ import dataStorage
 #https://arxiv.org/pdf/1811.00164.pdf
 
 #this agent breaks some compatibility with the other agents
-#which I think is fine as we generally do all of our searching ahead of time
-#so we'll need new runner functions
+#so it needs a separate runner function
+#(not that the other agents even exist any more)
 
 class DeepCfrAgent:
     #each player gets one of each model
@@ -44,7 +46,6 @@ class DeepCfrAgent:
     def __init__(
             self,
             writeLock,
-            trainingBarrier,
             sharedDict,
             advModels=None, stratModels=None,
             singleDeep=False,
@@ -54,13 +55,8 @@ class DeepCfrAgent:
 
 
         self.writeLock = writeLock
-        self.trainingBarrier = trainingBarrier
+        #self.trainingBarrier = trainingBarrier
         self.sharedDict = sharedDict
-
-        if config.resumeIter == None:
-            #fresh start, delete old data
-            dataStorage.clearData()
-            
 
         #if the adv models are passed in, assume we aren't responsible for sharing them
         if advModels:
@@ -70,10 +66,10 @@ class DeepCfrAgent:
             self.advModels = [full.model.DeepCfrModel(name='adv' + str(i), softmax=False, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
             self.manageSharedModels = True
 
-        if stratModels:
-            self.stratModels = stratModels
-        else:
-            self.stratModels = [full.model.DeepCfrModel(name='strat' + str(i), softmax=True, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
+        #if stratModels:
+            #self.stratModels = stratModels
+        #else:
+            #self.stratModels = [full.model.DeepCfrModel(name='strat' + str(i), softmax=True, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
 
         #whether to save old models for single deep cfr
         self.singleDeep = singleDeep
@@ -86,7 +82,7 @@ class DeepCfrAgent:
 
         self.verbose = verbose
 
-    async def search(self, context, pid=0, limit=100, innerLoops=1, seed=None, history=[[],[]]):
+    async def search(self, context, distGroup, pid=0, limit=100, innerLoops=1, seed=None, history=[[],[]]):
         self.pid = pid
 
         start = config.resumeIter if config.resumeIter else 0
@@ -128,22 +124,36 @@ class DeepCfrAgent:
             self.advModels[i % 2].clearSampleCache()
             #go ahead and clear our strat caches as well
             #just in case the program is exited
-            for j in range(2):
-                self.stratModels[j].clearSampleCache()
+            #for j in range(2):
+                #self.stratModels[j].clearSampleCache()
 
             #only need to train about once per iteration
-            self.trainingBarrier.wait()
+            #self.trainingBarrier.wait()
+
+            #this doesn't actually train
+            #if self.pid != 0:
+                #print('attempting to send train')
+                #self.advTrain(i % 2, iter=i // 2 + 1)
+            #print(self.pid, 'about to hit training barrier')
+            dist.barrier(distGroup)
+            #print(self.pid, 'just hit training barrier')
             if self.pid == 0:
                 if self.needsTraining:
+                    print('sending train message')
                     self.advTrain(i % 2, iter=i // 2 + 1)
                 #if self.manageSharedModels:
-                    #self.sharedDict['advNet' + str(i % 2)] = self.advModels[i % 2].net
+                #self.advModels[i % 2].net.cpu()
+                #self.sharedDict['advNet' + str(i % 2)] = self.advModels[i % 2].net
+                #self.advModels[i % 2].net.cuda()
                 #else:
                     #self.advModels[i % 2].shareMemory()
-            self.trainingBarrier.wait()
+            #self.trainingBarrier.wait()
+            distGroup.barrier()
+            #if self.pid != 0:
+            #self.advModels[i % 2].net = self.sharedDict['advNet' + str(i % 2)]
+            #self.advModels[i % 2].net.cuda()
             #broadcast the new network back out
             #if self.manageSharedModels:
-                #self.advModels[i % 2].net = self.sharedDict['advNet' + str(i % 2)]
             #else:
                 #self.advModels[i % 2].shareMemory()
             self.needsTraining = False
@@ -153,12 +163,16 @@ class DeepCfrAgent:
 
             
         #clear the sample caches so the master agent can train with our data
-        for sm in self.stratModels:
-            sm.clearSampleCache()
+        #for sm in self.stratModels:
+            #sm.clearSampleCache()
 
-        self.trainingBarrier.wait()
+        #self.trainingBarrier.wait()
+        distGroup.barrier()
 
         if self.pid == 0:
+            out = torch.zeros(3)
+            dist.send(out, dst=0)
+            print('playtime is over', file=sys.stderr)
             print(file=sys.stderr)
 
         """
@@ -172,19 +186,27 @@ class DeepCfrAgent:
 
 
     def advTrain(self, player, iter=1):
-        model = self.advModels[player]
-        model.train(epochs=config.advEpochs)
-        if(self.singleDeep):
-            self.oldModels[player].append(model.net)
-            self.oldModelWeights[player].append(iter)
+        #send message to net process to train network
+        dist.send(torch.tensor([1, player, 0]), dst=0)
+        #just block until it's done
+        out = torch.zeros(1, dtype=torch.long)
+        dist.recv(out, src=0)
+
+        #model = self.advModels[player]
+        #model.train(epochs=config.advEpochs)
+        #if(self.singleDeep):
+            #model.net.cpu()
+            #self.oldModels[player].append(model.net)
+            #model.net.cuda()
+            #self.oldModelWeights[player].append(iter)
             #self.sharedDict['oldModels'] = self.oldModels
             #self.sharedDict['oldModelWeights'] = self.oldModelWeights
 
         
     def stratTrain(self):
         if(self.singleDeep):
-            #self.oldModels = self.sharedDict['oldModels']
-            #self.oldModelWeights = self.sharedDict['oldModelWeights']
+            self.oldModels = self.sharedDict['oldModels']
+            self.oldModelWeights = self.sharedDict['oldModelWeights']
             print('skipping strategy', file=sys.stderr)
             return
         if self.pid == 0:
@@ -195,7 +217,44 @@ class DeepCfrAgent:
             model.net.embeddings = self.advModels[i].net.embeddings
             model.train(epochs=config.stratEpochs)
 
-    def getProbs(self, player, infoset, actions):
+    def getPredict(self, player, infoset):
+        inputTensor = model.infosetToTensor(infoset)
+        #if self.pid == 1:
+            #print('sending', inputTensor)
+        #print(self.pid, 'sending request')
+        #print(self.pid, 'sending', inputTensor)
+        dist.send(torch.tensor([2, player, inputTensor.shape[0]]), dst=0)
+        #print(self.pid, 'sending input with shape', inputTensor.shape, 'dtype', inputTensor.dtype, inputTensor)
+        dist.send(inputTensor, dst=0)
+        out = torch.zeros(config.game.numActions + 1)
+        #print(self.pid, 'getting output')
+        dist.recv(out, src=0)
+        #print(self.pid, 'got output')
+        out = out.detach().numpy()
+        #if self.pid == 1:
+            #print('got', out)
+        return out[0:-1], out[-1]
+
+    #getting probability for a given model to follow a given trajectory
+    #where a trajectory is a list of infoset-action pairs
+    def getReachProb(self, model, traj):
+        reachProb = 1
+        for infoset, action in traj:
+            probs, _ = model.predict(infoset)
+            actionNum = config.game.enumAction(action)
+            for i, p in enumerate(probs):
+                if probs[i] < 0:
+                    probs[i] = 0
+            pSum = sum(probs)
+            if pSum == 0:
+                #this should be 0, but I don't want to divide by zero somewhere down the line
+                reachProb *= 0.001
+            else:
+                reachProb *= probs[actionNum] / pSum
+        return reachProb
+
+    #getting final probabilities for executing a strategy
+    def getProbs(self, player, infoset, actions, prevTrajectory=None):
         if(self.singleDeep):
             stratProbs = None
             expVal = 0
@@ -204,16 +263,24 @@ class DeepCfrAgent:
             for i in range(len(self.oldModels[player])):
                 model.net = self.oldModels[player][i]
                 weight = self.oldModelWeights[player][i]
+                reachProb = self.getReachProb(model, prevTrajectory)
+                weight *= reachProb
                 probs, ev = model.predict(infoset, trace=False)
+                for i, p in enumerate(probs):
+                    if p < 0:
+                        probs[i] = 0
+                #probs, ev = self.getPredict(player, infoset)
                 expVal += ev * weight
                 if(stratProbs is not None):
                     stratProbs += weight * probs
                 else:
                     stratProbs = weight * probs
+            #this is incorrect, but larger expVals still generally mean better predicted outcomes
             expVal /= len(self.oldModels[player])
         else:
             sm = self.stratModels[player]
             stratProbs, expVal = sm.predict(infoset, trace=False)
+            #stratProbs, expVal = self.getPredict(sm, infoset)
         print('infoset', infoset)
         print('strat probs', stratProbs)
         print('expVal', expVal)
@@ -227,6 +294,7 @@ class DeepCfrAgent:
         if pSum > 0:
             return probs / np.sum(probs)
         else:
+            #play randomly
             return np.array([1 / len(actions) for a in actions])
 
     #recursive implementation of cfr
@@ -330,15 +398,15 @@ class DeepCfrAgent:
                 r = await self.cfrRecur(context, game, startSeed, newHistory, iter, depth=depth+1, rollout=curRollout, q=q*probs[i])
                 rewards.append(r)
 
-            if self.verbose:
-                print('infoset', infoset)
-                print('actions, probs, and rewards', list(zip(actions, probs, rewards)))
             if not rollout:
                 #save sample of advantages
                 stateExpValue = 0
                 for p,r in zip(probs, rewards):
                     stateExpValue += p * r
-                advantages = [r - stateExpValue for r in rewards]
+                advantages = [max(0, r - stateExpValue) for r in rewards]
+                #if self.pid == 0:
+                    #print('infoset', infoset)
+                    #print('actions, prob, reward, advantage', *list(zip(actions, probs, rewards, advantages)))
                 #CFR+, anyone?
                 #also using the sqrt(t) equation from that double neural cfr paper
                 #advantages = [max(0, math.sqrt(iter // 2) * g / math.sqrt(iter // 2 + 1) + (r - stateExpValue) / math.sqrt(iter // 2 + 1)) for r, g in zip(rewards, regrets)]
@@ -364,8 +432,9 @@ class DeepCfrAgent:
     #generates probabilities for each action
     #based on modeled advantages
     def regretMatch(self, player, infoset, actions, depth):
-        am = self.advModels[player]
-        advs, expVal = am.predict(infoset)
+        #am = self.advModels[player]
+        #advs, expVal = am.predict(infoset)
+        advs, expVal = self.getPredict(player, infoset)
         #illegal actions should be 0
         flatAdvs = np.zeros(len(advs))
         actionNums = [config.game.enumAction(a) for a in actions]

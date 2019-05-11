@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 
-from apex import amp
+#from apex import amp
 from hashembed.embedding import HashEmbedding
 import io
+import math
 import numpy as np
 import sys
 import torch
@@ -13,14 +14,14 @@ import torch.nn.utils
 import torch.optim as optim
 import torch.utils.data
 from torch.utils.data.sampler import SubsetRandomSampler
+import torchvision.transforms as transforms
+from batchgenerators.dataloading import MultiThreadedAugmenter
+import time
 
 import dataStorage
 import config
 
-#this should stop some errors about too many files being open
-#torch.multiprocessing.set_sharing_strategy('file_system')
-
-amp_handle = amp.init()
+#amp_handle = amp.init()
 
 #how many bits are used to represent numbers in tokens
 NUM_TOKEN_BITS = config.numTokenBits
@@ -54,13 +55,26 @@ def tokenToTensor(x):
 def infosetToTensor(infoset):
     return torch.stack([tokenToTensor(token) for token in infoset])
 
+def batchNorm(x):
+    if x.shape[0] == 1:
+        return x
+    #this is normalizing to zero mean, unit variance
+    mean = torch.mean(x, dim=0)
+    x = x - mean.unsqueeze(0).repeat(x.shape[0], 1)
+    std = torch.std(x, dim=0)
+    #if a std is 0, then the mean is also 0, so there's nothing we can do except pass 0 along via 0 / 0.01
+    #and this operation is much simpler than trying to only change the 0 values
+    std = std + torch.Tensor([0.00001]).repeat(std.shape[0]).cuda()
+    x = x / std.unsqueeze(0).repeat(x.shape[0], 1)
+    return x
+
 class SimpleNet(nn.Module):
     def __init__(self, softmax=False):
         super(Net, self).__init__()
         self.outputSize = config.game.numActions
         self.softmax = softmax
         self.inputSize = 15
-        dropout = 0.5
+        dropout = 0
         self.embeddings = HashEmbedding(config.vocabSize, config.embedSize, append_weight=False, mask_zero=True)
         self.dropE = nn.Dropout(dropout)
 
@@ -71,7 +85,12 @@ class SimpleNet(nn.Module):
         self.drop2 = nn.Dropout(dropout)
         self.fc3 = nn.Linear(config.width, config.width)
         self.drop3 = nn.Dropout(dropout)
+
         self.fc6 = nn.Linear(config.width, self.outputSize)
+
+        self.fcVal1 = nn.Linear(config.width, config.width)
+        self.fcVal2 = nn.Linear(config.width, config.width)
+        self.fcValOut = nn.Linear(config.width, 1)
 
 
     def forward(self, infoset, lengths=None, trace=False):
@@ -87,13 +106,15 @@ class SimpleNet(nn.Module):
         if trace:
             print('infoset', infoset, file=sys.stderr)
         embedded = self.embeddings(infoset[:,:,0])
-        if trace:
-            print('embedded', embedded, file=sys.stderr)
 
         #embedding seems to spit out some pretty low-magnitude vectors
         #so let's try normalizing
-        #embedded = F.normalize(embedded, p=2, dim=2)
-        #embedded = self.dropout(embedded)
+        embedded = F.normalize(embedded, p=2, dim=2)
+
+        if trace:
+            print('embedded', embedded, file=sys.stderr)
+
+        #embedded = self.dropE(embedded)
         #replace the hash with the embedded vector
         embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
         del infoset
@@ -102,26 +123,56 @@ class SimpleNet(nn.Module):
         x = torch.cat(tuple(x.transpose(0,1)), 1)
         x = self.dropE(x)
 
+        if trace:
+            print('before first linear', x, file=sys.stderr)
+
         x = F.relu(self.fc1(x))
         x = self.drop1(x)
+
+        if trace:
+            print('before split', x, file=sys.stderr)
+
+        xVal = x
+
         #2 and 3 have skip connections, as they have the same sized input and output
-        x = F.relu(self.fc2(x) + x)
-        x = self.drop2(x)
+        x = F.relu(self.fc2(x))# + x)
         #x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x) + x)
-        x = self.drop3(x)
+        x = self.drop2(x)
+
+        x = F.relu(self.fc3(x))# + x)
         #x = F.relu(self.fc3(x))
+        x = self.drop3(x)
+
+        if trace:
+            print('pre norm', x, file=sys.stderr)
+
         #deep cfr does normalization here
-        #I'm not sure if this is the right kind of normalization
-        #x = F.normalize(x, p=2, dim=1)
+        #x = batchNorm(x)
+
+        if trace:
+            print('post norm', x, file=sys.stderr)
+
         x = self.fc6(x)
 
         if self.softmax:
             x = F.softmax(x, dim=1)
+        else:
+            pass
+            #x = torch.sigmoid(x)
+            #x = F.relu(x)
+
+        #value output
+        xVal = F.relu(self.fcVal1(xVal))# + xVal)
+        xVal = F.relu(self.fcVal2(xVal))# + xVal)
+        #xVal = torch.tanh(self.fcValOut(xVal))
+        #xVal = batchNorm(xVal)
+        xVal = self.fcValOut(xVal)
 
         if isSingle:
-            return x[0]
+            return torch.cat([x[0], xVal[0]])
         else:
+            x = torch.cat([x, xVal], dim=1)
+            #x = batchNorm(x)
             return x
 
 
@@ -185,7 +236,7 @@ class LstmNet(nn.Module):
         self.fc3 = nn.Linear(config.width, config.width)
         self.fc6 = nn.Linear(config.width, self.outputSize)
 
-        self.fcVal1 = nn.Linear(config.width, config.width)
+        self.fcVal1 = nn.Linear(config.lstmSize, config.width)
         self.fcVal2 = nn.Linear(config.width, config.width)
         self.fcValOut = nn.Linear(config.width, 1)
 
@@ -202,12 +253,12 @@ class LstmNet(nn.Module):
         if trace:
             print('infoset', infoset, file=sys.stderr)
         embedded = self.embeddings(infoset[:,:,0])
+        #embedding seems to spit out some pretty low-magnitude vectors
+        #so let's try normalizing
+        embedded = F.normalize(embedded, p=2, dim=2)
         if trace:
             print('embedded', embedded, file=sys.stderr)
 
-        #embedding seems to spit out some pretty low-magnitude vectors
-        #so let's try normalizing
-        #embedded = F.normalize(embedded, p=2, dim=2)
         embedded = self.dropout(embedded)
         #replace the hash with the embedded vector
         embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
@@ -286,10 +337,10 @@ class LstmNet(nn.Module):
         xVal = x
         x = F.relu(self.fc1(x))
         #2 and 3 have skip connections, as they have the same sized input and output
-        x = F.relu(self.fc2(x) + x)
-        #x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x) + x)
-        #x = F.relu(self.fc3(x))
+        #x = F.relu(self.fc2(x) + x)
+        x = F.relu(self.fc2(x))
+        #x = F.relu(self.fc3(x) + x)
+        x = F.relu(self.fc3(x))
         #deep cfr does normalization here
         #I'm not sure if this is the right kind of normalization
         #x = F.normalize(x, p=2, dim=1)
@@ -309,8 +360,37 @@ class LstmNet(nn.Module):
             x = torch.cat([x, xVal], dim=1)
             return x
 
+
+
+
 Net = LstmNet
 #Net = SimpleNet
+
+
+def myCollate(batch):
+    #based on the collate_fn here
+    #https://github.com/yunjey/pytorch-tutorial/blob/master/tutorials/03-advanced/image_captioning/data_loader.py
+
+    #sort by data length
+    batch.sort(key=lambda x: len(x[0]), reverse=True)
+    data, labels, iters = zip(*batch)
+
+    #labels and iters have a fixed size, so we can just stack
+    labels = torch.stack(labels)
+    iters = torch.stack(iters)
+
+    #sequences are padded with 0 vectors to make the lengths the same
+    lengths = [len(d) for d in data]
+    padded = torch.zeros(len(data), max(lengths), len(data[0][0]), dtype=torch.long)
+    for i, d in enumerate(data):
+        end = lengths[i]
+        padded[i, :end] = d[:end]
+
+    #need to know the lengths so we can pack later
+    lengths = torch.tensor(lengths)
+
+    return padded, lengths, labels, iters
+
 
 class DeepCfrModel:
 
@@ -323,18 +403,18 @@ class DeepCfrModel:
     #are almost the same (modelInput.numActions)
     #strategy is softmaxed, advantage is not
 
-    def __init__(self, name, softmax, writeLock, sharedDict):
+    def __init__(self, name, softmax, writeLock, sharedDict, useNet=True):
         self.softmax = softmax
         self.lr = config.learnRate
         self.writeLock = writeLock
         self.sharedDict = sharedDict
         self.outputSize = config.game.numActions
 
-        self.net = Net(softmax=softmax)
-        #self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
-        self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
-        self.patience = 10
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
+        if(useNet):
+            self.net = Net(softmax=softmax)
+            self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+            #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
+            self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
 
         #cache of (infoset tensor, label tensor, iteration) tuples
         #will eventually be put in training db
@@ -346,15 +426,16 @@ class DeepCfrModel:
     def shareMemory(self):
         self.net.share_memory()
 
-    def addSample(self, infoset, label, iter):
+    def addSample(self, infoset, label, iter, expValue):
         #infosetTensor = np.array([hash(token) for token in infoset], dtype=np.long)
         infosetTensor = infosetToTensor(infoset)
 
-        labelTensor = np.zeros(self.outputSize)
+        labelTensor = np.zeros(self.outputSize + 1)
         for action, value in label:
             #print(action, value)
             n = config.game.enumAction(action)
             labelTensor[n] = value
+        labelTensor[-1] = expValue
         #print('saving label', labelTensor)
 
         iterTensor = np.array([iter])
@@ -376,13 +457,56 @@ class DeepCfrModel:
         #so we can use the same training data in the future
         self.clearSampleCache()
 
-    def predict(self, infoset, trace=False):
-        data = infosetToTensor(infoset)
+    #infosets is a list of tensors
+    def batchPredict(self, infosets, convertToTensor=True, trace=False):
+        #print('infosets', infosets)
+        batch = [infosetToTensor[i] for i in infosets] if convertToTensor else infosets
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+        self.net = self.net.to(device)
+        batch = [b.to(device) for b in batch]
+        if len(batch) > 1:
+            #sort, but need to keep trach of the original indices
+            batch = list(enumerate(batch))
+            batch.sort(key=lambda x: len(x[1]), reverse=True)
+            indices = torch.tensor([b[0] for b in batch], dtype=torch.long).to(device)
+            #print('indices', indices)
+            #no longer need indices in batch
+            batch = [b[1] for b in batch]
+            #print('batch after sorting', batch, file=sys.stderr)
+            #sort by length and padd
+            lengths = [len(b) for b in batch]
+            padded = torch.zeros(len(batch), max(lengths), len(batch[0][0]), dtype=torch.long).to(device)
+            for i, d in enumerate(batch):
+                end = lengths[i]
+                padded[i, :end] = d[:end]
+            #pass padded to network
+            lengths = torch.tensor(lengths).to(device)
+            #padded = padded.to(device)
+            #lengths = lengths.to(device)
+            #print('padded', padded, file=sys.stderr)
+            #print('lengths', lengths, file=sys.stderr)
+            out = self.net(padded, lengths=lengths, trace=trace)
+            #unsort with scatter
+            unsortedOut = torch.zeros(out.shape).to(device)
+            #print('out', out)
+            indices = indices.unsqueeze(1).expand(-1, out.shape[1])
+            #print('expaned indices', indices)
+            unsortedOut.scatter_(0, indices, out)
+            return unsortedOut.cpu()
+        else:
+            batch[0] = batch[0].to(device)
+            out = self.net(batch[0], trace=trace)
+            return out.unsqueeze(0)
+
+
+    def predict(self, infoset, convertToTensor=True, trace=False):
+        data = infosetToTensor(infoset) if convertToTensor else infoset
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
         #device = torch.device('cpu')
         self.net = self.net.to(device)
         data = data.to(device)
-        return self.net(data, trace=trace).cpu().detach().numpy()
+        data = self.net(data, trace=trace).cpu().detach().numpy()
+        return data[0:-1], data[-1]
 
     def train(self, epochs=1):
         #move from write cache to db
@@ -392,120 +516,154 @@ class DeepCfrModel:
         #device = torch.device('cpu')
 
         if config.newIterNets:
-            self.net = Net(softmax=self.softmax)
+            newNet = Net(softmax=self.softmax)
+            #embedding should be preserved across iterations
+            #but we want a fresh start for the strategy
+            #newNet.embeddings = self.net.embeddings
+            #maybe not, if we're going to be using the old net in the future
+            self.net = newNet
 
 
         self.net = self.net.to(device)
-        #self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
-        self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
+        self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+        #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
         miniBatchSize = config.miniBatchSize
         self.net.train(True)
 
-        def myCollate(batch):
-            #based on the collate_fn here
-            #https://github.com/yunjey/pytorch-tutorial/blob/master/tutorials/03-advanced/image_captioning/data_loader.py
-
-            #sort by data length
-            batch.sort(key=lambda x: len(x[0]), reverse=True)
-            data, labels, iters = zip(*batch)
-
-            #labels and iters have a fixed size, so we can just stack
-            labels = torch.stack(labels)
-            iters = torch.stack(iters)
-
-            #sequences are padded with 0 vectors to make the lengths the same
-            lengths = [len(d) for d in data]
-            padded = torch.zeros(len(data), max(lengths), len(data[0][0]), dtype=torch.long)
-            for i, d in enumerate(data):
-                end = lengths[i]
-                padded[i, :end] = d[:end]
-
-            #need to know the lengths so we can pack later
-            lengths = torch.tensor(lengths)
-
-            return padded, lengths, labels, iters
-
+        #used for scheduling
         lowestLoss = 999
         lowestLossIndex =  -1
+        lastResetLoss = None
+        runningLoss = []
+
+        #we don't really use the dataset, but we use it to read some files
+        #we should fix this, but it works and doesn't really hurt anything
+        dataset = dataStorage.Dataset(self.name, self.sharedDict, self.outputSize)
+
+        #validation split based on 
+        #https://stackoverflow.com/questions/50544730/how-do-i-split-a-custom-dataset-into-training-and-test-datasets
+        indices = list(range(dataset.size))
+        split = int(np.floor(config.valSplit * min(dataset.size, config.epochMaxNumSamples)))
+        np.random.shuffle(indices)
+        trainIndices, testIndices = indices[split:min(dataset.size, config.epochMaxNumSamples)], indices[:split]
+        #trainSampler = SubsetRandomSampler(trainIndices)
+        #testSampler = SubsetRandomSampler(testIndices)
+
+        trainingLoader = dataStorage.BatchDataLoader(id=self.name, indices=trainIndices, batch_size=config.miniBatchSize, num_threads_in_mt=config.numWorkers)
+        if config.numWorkers > 1:
+            trainingLoader = MultiThreadedAugmenter(trainingLoader, None, config.numWorkers, 2, None)
+
+        testingLoader = dataStorage.BatchDataLoader(id=self.name, indices=trainIndices, batch_size=config.miniBatchSize, num_threads_in_mt=config.numWorkers)
+        if config.numWorkers > 1:
+            testingLoader = MultiThreadedAugmenter(testingLoader, None, config.numWorkers)
 
         print(file=sys.stderr)
         for j in range(epochs):
             if epochs > 1:
                 print('\repoch', j, end=' ', file=sys.stderr)
-            dataset = dataStorage.Dataset(self.name, self.sharedDict, self.outputSize)
 
-            #validation split based on 
-            #https://stackoverflow.com/questions/50544730/how-do-i-split-a-custom-dataset-into-training-and-test-datasets
-            valSplit = 0.1
-            indices = list(range(dataset.size))
-            split = int(np.floor(valSplit * min(dataset.size, config.epochMaxNumSamples)))
-            np.random.shuffle(indices)
-            trainIndices, testIndices = indices[split:min(dataset.size, config.epochMaxNumSamples)], indices[:split]
-            trainSampler = SubsetRandomSampler(trainIndices)
-            testSampler = SubsetRandomSampler(testIndices)
+            """
+            if j % 100 == 0:
+                self.net.train(False)
+                exampleInfoSets = [
+                    ['start', 'hand', '2', '0', 'deal', '1', 'raise'],
+                    ['start', 'hand', '9', '0', 'deal', '1', 'raise'],
+                    ['start', 'hand', '14', '0', 'deal', '1', 'raise'],
+                ]
+                self.net.train(True)
 
-            loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=False, num_workers=config.numWorkers, pin_memory=False, collate_fn=myCollate, sampler=trainSampler)
-            testLoader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=False, num_workers=config.numWorkers, pin_memory=False, collate_fn=myCollate, sampler=testSampler)
+                for example in exampleInfoSets:
+                    print('example input:', example, file=sys.stderr)
+                    probs, expVal = self.predict(example, trace=False)
+                    print('exampleOutput (deal, fold, call, raise)', np.round(100 * probs), 'exp value', round(expVal * 100), file=sys.stderr)
+            """
+
+            
+            #loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=False, num_workers=config.numWorkers, pin_memory=False, collate_fn=myCollate, sampler=trainSampler)
 
             if j == 0:
                 print('training size:', len(trainIndices), 'val size:', len(testIndices), file=sys.stderr)
 
             totalLoss = 0
+            lossFunc = nn.MSELoss()
 
             i = 1
             sampleCount = 0
             chunkSize = dataset.size  / (miniBatchSize * 10)
-            for data, dataLengths, labels, iters in loader:
+            #for data, dataLengths, labels, iters in loader:
+            for data, dataLengths, labels, iters in trainingLoader:
                 sampleCount += dataLengths.shape[0]
                 i += 1
 
                 labels = labels.float().to(device)
+                #labels = batchNorm(labels)
                 iters = iters.float().to(device)
                 data = data.long().to(device)
                 dataLengths = dataLengths.long().to(device)
+                #print('------')
+                #print('data', data.squeeze(), file=sys.stderr)
+                #print('label', labels, file=sys.stderr)
+                #print('label exp values', labels[:, -1], file=sys.stderr)
+                #print('label exp values avg', labels[:, -1].mean(), file=sys.stderr)
+                #print('label exp values std', labels[:, -1].std(), file=sys.stderr)
 
                 #evaluate on network
                 self.optimizer.zero_grad()
                 ys = self.net(data, lengths=dataLengths, trace=False)
+                #print('ys', ys, file=sys.stderr)
+                #print('ys exp values', ys[:, -1], file=sys.stderr)
+                #print('ys exp values avg', ys[:, -1].mean(), file=sys.stderr)
+                #print('ys exp values std', ys[:, -1].std(), file=sys.stderr)
 
                 #loss function from the paper
                 loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))# / labels.shape[0]
-                #if i % 10 == 0:
-                    #print('----------', file=sys.stderr)
+                #loss = torch.sum((labels - ys) ** 2) / labels.shape[0]
+                #loss = lossFunc(ys, labels)
+                #print('loss', loss)
+                """
+                if i % 1 == 0:
+                    print('----------', file=sys.stderr)
                     #print('iters', iters, file=sys.stderr)
-                    #print('infosets', data, file=sys.stderr)
-                    #print('ys', ys, file=sys.stderr)
-                    #print('labels', labels, file=sys.stderr)
+                    print('infosets', data, file=sys.stderr)
+                    print('ys', torch.round(ys * 100) / 100, file=sys.stderr)
+                    print('labels', torch.round(labels * 100) / 100, file=sys.stderr)
+                """
 
                 #get gradient of loss
                 #use amp because nvidia said it's better
-                with amp_handle.scale_loss(loss, self.optimizer) as scaled_loss:
-                    scaled_loss.backward()
-                #loss.backward()
+                #TODO fix amp
+                #with amp_handle.scale_loss(loss, self.optimizer) as scaled_loss:
+                    #scaled_loss.backward()
+                loss.backward()
 
 
                 #clip gradient norm, which was done in the paper
-                nn.utils.clip_grad_norm_(self.net.parameters(), 1)
+                nn.utils.clip_grad_norm_(self.net.parameters(), 5)
 
                 #train the network
                 self.optimizer.step()
                 totalLoss += loss.item()
+
 
             avgLoss = totalLoss / sampleCount
             with open('trainloss.csv', 'a') as file:
                 print(avgLoss, end=',', file=file)
 
             #get validation loss
+            #testLoader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, num_workers=config.numWorkers, collate_fn=myCollate, sampler=testSampler)
             self.net.train(False)
             totalValLoss = 0
             valCount = 0
-            for data, dataLengths, labels, iters in testLoader:
+            #for data, dataLengths, labels, iters in testLoader:
+            for data, dataLengths, labels, iters in testingLoader:
                 labels = labels.float().to(device)
+                #print('labels', np.round(100 * labels.cpu().numpy()) / 100, file=sys.stderr)
                 iters = iters.float().to(device)
                 data = data.long().to(device)
                 dataLengths = dataLengths.long().to(device)
                 ys = self.net(data, lengths=dataLengths, trace=False)
+                #print('ys', np.round(100 * ys.cpu().detach().numpy()) / 100, file=sys.stderr)
                 loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))# / labels.shape[0]
                 totalValLoss += loss.item()
                 valCount += dataLengths.shape[0]
@@ -514,8 +672,11 @@ class DeepCfrModel:
 
             avgValLoss = totalValLoss / valCount
 
-            #we could use training loss
-            schedLoss = avgValLoss
+            #running average of last 3 validation losses
+            runningLoss.append(avgValLoss)
+            if len(runningLoss) > 3:
+                runningLoss = runningLoss[-3:]
+            schedLoss = sum(runningLoss) / len(runningLoss)
 
             if config.useScheduler:
                 self.scheduler.step(schedLoss)
@@ -524,17 +685,26 @@ class DeepCfrModel:
                 lowestLoss = schedLoss
                 lowestLossIndex = j
 
-            if j - lowestLossIndex > 50:#avoid saddle points
-                #self.optimizer = optim.Adam(self.net.parameters(), lr=config.learnRate)
-                self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
+            if j - lowestLossIndex > 3 * config.schedulerPatience:#avoid saddle points
+                print('resetting learn rate to default', j, lowestLossIndex, lowestLoss, schedLoss, lastResetLoss, file=sys.stderr)
+                self.optimizer = optim.Adam(self.net.parameters(), lr=config.learnRate)
+                #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
                 self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
+                lowestLossIndex = j
+
+                #if we've reset before and made no progress, just stop
+                if lastResetLoss is not None and (schedLoss - lastResetLoss) / lastResetLoss > -0.01:
+                    print('stopping epoch early, (schedLoss - lastResetLoss) / lastResetLoss) is', (schedLoss - lastResetLoss) / lastResetLoss, file=sys.stderr)
+                    break
+                lastResetLoss = schedLoss
 
 
 
             #show in console and output to csv
             print('val Loss', avgValLoss, end='', file=sys.stderr)
             with open('valloss.csv', 'a') as file:
-                print(totalValLoss / valCount, end=',', file=file)
+                #print(avgValLoss, end=',', file=file)
+                print(schedLoss, end=',', file=file)
 
         with open('valloss.csv', 'a') as file:
             print(file=file)
@@ -543,27 +713,38 @@ class DeepCfrModel:
         print('\n', file=sys.stderr)
 
         self.net.train(False)
+        exampleInfoSets = [
+            ['start', 'hand', '2', '0', 'deal', '1', 'raise'],
+            ['start', 'hand', '7', '0', 'deal', '1', 'raise'],
+            ['start', 'hand', '14', '0', 'deal', '1', 'raise'],
+            ['start', 'hand', '2', '1', 'deal'],
+            ['start', 'hand', '7', '1', 'deal'],
+            ['start', 'hand', '14', '1', 'deal'],
+        ]
+        for example in exampleInfoSets:
+            print('example input:', example, file=sys.stderr)
+            probs, expVal = self.predict(example, trace=False)
+            print('exampleOutput (deal, fold, call, raise)', np.round(100 * probs), 'exp value', round(expVal * 100), file=sys.stderr)
 
-def netTest():
-    net = Net()
-    list1 = infosetToTensor(['a', 'b', 'c'])
-    list2 = infosetToTensor(['d', 'e', 'f'])
-    list3 = infosetToTensor(['g', 'h'])
-    #simple test
-    out1 = net.forward(list1)
-    out2 = net.forward(list2)
-    print('simple1', out1)
-    print('simple2', out2)
-    #batch test
-    out = net.forward([
-        list1,
-        list2,
-    ])
-    print('batch', out)
-    #multi length batch test
-    out = net.forward([
-        list3,
-        list1,
-        list3,
-    ])
-    print('multi length batch', out)
+        #ace example
+        """
+        target = infosetToTensor(exampleInfoSets[2]).squeeze()
+        count = 0
+        total = None
+        for i in range(len(dataset)):
+            infoset, label, iter = dataset[i]
+            infoset = infoset.squeeze()
+            if infoset.shape[0] == target.shape[0] and torch.all(torch.eq(infoset, target)):
+                print(label, file=sys.stderr)
+                if count == 0:
+                    total = label
+                else:
+                    total = total + label
+                count += 1
+        if count > 0:
+            print('average', total / count)
+            input("PRESS ENTER (this will work or crash, either is fine)")
+        """
+
+        #clean old data out
+        #dataStorage.clearSamplesByName(self.name)

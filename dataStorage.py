@@ -9,6 +9,8 @@ import sys
 import torch
 import torch.utils.data
 import torch.multiprocessing as mp
+from batchgenerators.dataloading import SlimDataLoaderBase
+from lockfile import LockFile
 
 import config
 
@@ -62,6 +64,8 @@ def clearSamplesByName(name):
 def addSamples(lock, id, samples, sharedDict):
     #write our count to the index file
     #which must be thread-safe
+    #actually lock on the index file
+    lock = LockFile(DATA_DIR + 'index')
     lock.acquire()
     if IN_MEMORY:
         if 'smp' + id not in sharedDict:
@@ -121,6 +125,72 @@ def addSamples(lock, id, samples, sharedDict):
 
     lock.release()
 
+
+def myCollate(batch):
+    #based on the collate_fn here
+    #https://github.com/yunjey/pytorch-tutorial/blob/master/tutorials/03-advanced/image_captioning/data_loader.py
+
+    #sort by data length
+    batch.sort(key=lambda x: len(x[0]), reverse=True)
+    data, labels, iters = zip(*batch)
+
+    #labels and iters have a fixed size, so we can just stack
+    labels = torch.stack(labels)
+    iters = torch.stack(iters)
+
+    #sequences are padded with 0 vectors to make the lengths the same
+    lengths = [len(d) for d in data]
+    padded = torch.zeros(len(data), max(lengths), len(data[0][0]), dtype=torch.long)
+    for i, d in enumerate(data):
+        end = lengths[i]
+        padded[i, :end] = d[:end]
+
+    #need to know the lengths so we can pack later
+    lengths = torch.tensor(lengths)
+
+    return padded, lengths, labels, iters
+
+
+
+#following this
+#https://github.com/MIC-DKFZ/batchgenerators/blob/master/batchgenerators/examples/multithreaded_dataloading.py
+class BatchDataLoader(SlimDataLoaderBase):
+    def __init__(self, id, indices, batch_size, num_threads_in_mt):
+        super(BatchDataLoader, self).__init__(None, batch_size, num_threads_in_mt)
+
+        self.id = id
+        self.size = len(indices)
+        self.indices = indices
+        self.current_position = 0
+        self.was_initialized = False
+
+    def reset(self):
+        self.current_position = self.thread_id
+        self.was_initialized = True
+
+    def generate_train_batch(self):
+        if not self.was_initialized:
+            self.reset()
+        batch = []
+        for i in range(self.batch_size):
+            if self.current_position < self.size:
+                idx = self.indices[self.current_position]
+                self.current_position += self.number_of_threads_in_multithreaded
+                with open(DATA_DIR + self.id + '/' + str(idx), 'rb') as file:
+                    sample = pickle.load(file)
+
+                data, label, iter = sample
+                label = torch.from_numpy(label)
+                iter = torch.from_numpy(iter)
+                batch.append([data, label, iter])
+
+            elif len(batch) > 0:
+                return myCollate(batch)
+            else:
+                self.reset()
+                raise StopIteration
+        return myCollate(batch)
+            
 
 class Dataset(torch.utils.data.Dataset):
     def __init__(self, id, sharedDict, outputSize):
