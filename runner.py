@@ -92,8 +92,8 @@ async def trainAndPlay(file=sys.stdout):
     else:
         #copy in the untrained model for testing
         #in the future we could optionally load in trained models from the disk
-        agent.oldModels[0] = [agent.advModels[0]]
-        agent.oldModels[1] = [agent.advModels[1]]
+        agent.oldModels = [[agent.advModels[0].net], [agent.advModels[1].net]]
+        agent.oldModelWeights = [[1],[1]]
 
     if pid != 0:
         return

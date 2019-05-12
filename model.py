@@ -713,6 +713,8 @@ class DeepCfrModel:
         print('\n', file=sys.stderr)
 
         self.net.train(False)
+        #warPoker examples
+        """
         exampleInfoSets = [
             ['start', 'hand', '2', '0', 'deal', '1', 'raise'],
             ['start', 'hand', '7', '0', 'deal', '1', 'raise'],
@@ -725,6 +727,7 @@ class DeepCfrModel:
             print('example input:', example, file=sys.stderr)
             probs, expVal = self.predict(example, trace=False)
             print('exampleOutput (deal, fold, call, raise)', np.round(100 * probs), 'exp value', round(expVal * 100), file=sys.stderr)
+        """
 
         #ace example
         """

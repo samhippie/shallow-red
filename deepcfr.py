@@ -91,8 +91,6 @@ class DeepCfrAgent:
         if self.pid == 0:
             print(end='', file=sys.stderr)
         for i in range(start, limit):
-            if self.pid == 0:
-                print('\rTurn Progress: ' + str(i) + '/' + str(limit), end='', file=sys.stderr)
 
             #this is mainly used for setting a condition breakpoint
             #there's probably a better way
@@ -101,6 +99,8 @@ class DeepCfrAgent:
 
             #for small games, this is necessary to get a decent number of samples
             for j in range(innerLoops):
+                if self.pid == 0:
+                    print('\rTurn Progress: ' + str(i) + '/' + str(limit) + ' inner ' + str(j) + '/' + str(innerLoops), end='', file=sys.stderr)
                 self.needsTraining = True
                 #we want each game tree traversal to use the same seed
                 if seed:
@@ -110,14 +110,6 @@ class DeepCfrAgent:
                 game = config.game.Game(context=context, seed=curSeed, history=history, verbose=self.verbose)
                 await game.startGame()
                 await self.cfrRecur(context, game, curSeed, history, i)
-
-
-            """
-            table = self.advModels[0].values
-            for infoset, action in table:
-                if infoset[2] == '2':
-                    print((infoset, action), table[(infoset, action)])
-            """
 
 
             #save our adv data after each iteration
@@ -315,7 +307,7 @@ class DeepCfrAgent:
         if player == offPlayer:
             #get probs so we can sample a single action
             probs, _ = self.regretMatch(offPlayer, infoset, actions, -1)
-            exploreProbs = probs * (1 - config.exploreRate) + config.exploreRate / len(actions)
+            exploreProbs = probs * (1 - config.offExploreRate) + config.offExploreRate / len(actions)
             action = np.random.choice(actions, p=exploreProbs)
 
             #if depth == 1 and self.pid == 0:
@@ -344,14 +336,19 @@ class DeepCfrAgent:
                 #print('onplayer ' + str(player) + ' hand ' + str(game.hands[player]) + ' probs', list(zip(actions, probs)), 'advs', regrets, file=sys.stderr)
             if rollout:
                 #we pick one action according to the current strategy
+                #like this paper, except we also do it when we hit a depth limit
+                #https://poker.cs.ualberta.ca/publications/AAAI12-generalmccfr.pdf
                 actions = [np.random.choice(actions, p=probs)]
                 actionIndices = [0]
             elif config.branchingLimit:
                 #select a set of actions to pick
                 #chance to play randomly instead of picking the best actions
-                exploreProbs = probs# * (0.9) + 0.1 / len(probs)
-                #there might be some duplicates but it shouldn't matter
-                actionIndices = np.random.choice(len(actions), config.branchingLimit, p=exploreProbs)
+                #this paper suggests playing according the currect strategoy with some exploration factor for outcome
+                #sampling (i.e. branchLimit = 1), so I assume that
+                #http://mlanctot.info/files/papers/nips09mccfr.pdf
+                exploreProbs = probs * (1 - config.onExploreRate) + config.onExploreRate / len(probs)
+                actionIndices = np.random.choice(len(actions), min(len(actions), config.branchingLimit), 
+                        replace=False, p=exploreProbs)
             else:
                 #we're picking every action
                 actionIndices = list(range(len(actions)))

@@ -125,7 +125,7 @@ class Game:
             seed, action = h[player][0]
             del h[player][0]
             #ignore the seed, as the cards are already set
-            await self.takeAction(player, req, action)
+            await self.takeAction(player, action)
 
     async def getTurn(self):
         if self.state == _Game.START:

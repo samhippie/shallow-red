@@ -5,7 +5,10 @@ import copy
 import json
 import numpy as np
 import random
+import subprocess
 import sys
+
+import config
 
 #location of the modified ps executable
 PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
@@ -13,11 +16,14 @@ PS_ARG = 'simulate-battle'
 
 class _Context:
     async def __aenter__(self):
+        print('making ps process', file=sys.stderr)
         self.ps = await asyncio.create_subprocess_exec(PS_PATH, PS_ARG,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE)
+        return self.ps
 
-    async def __aexit(self, *args):
+    async def __aexit__(self, *args):
+        print('terminating ps process', file=sys.stderr)
         self.ps.terminate()
 
 #our context is a pokemon showdown process
@@ -29,13 +35,13 @@ def getContext():
 #so for doubles you would select your pokemon separately
 #and your previously selected subactions would be a part of your infoset
 actionMap = {
-    'team 123': 0,
-    'team 213': 1,
-    'team 312': 2,
-    'move 1,pass': 3,
-    'move 2,pass': 4,
-    'move 3,pass': 5,
-    'move 4,pass': 6,
+    'team 1': 0,
+    'team 2': 1,
+    'team 3': 2,
+    'move 1 1,pass': 3,
+    'move 2 1,pass': 4,
+    'move 3 1,pass': 5,
+    'move 4 1,pass': 6,
     'setteam |charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||': 7,
     'pass,pass': 8
 }
@@ -44,7 +50,7 @@ numActions = len(actionMap)
 
 uselessPrefixes = [
     'player', 'teamsize', 'gametype', 'gen', 'tier', 'seed',
-    'rule', 'c', 'clearpoke\n', 'teampreview', 'start',
+    'rule', 'c', 'clearpoke\n', 'teampreview', 'start', '-hint',
 ]
 #turns a line into a series of tokens that can be added to an infoset
 #takes the player to normalize between p1 and p2
@@ -102,16 +108,15 @@ class Game:
 
         self.waitingOnAction = False
 
-        if format == 'singles':
+        if self.format == 'singles':
             self.psFormat = 'anythinggoes'
-        elif format == '2v2':
+        elif self.format == '2v2':
             self.psFormat = '2v2doubles'
-        elif format == 'vgc':
+        elif self.format == 'vgc':
             self.psFormat = 'vgc2019sunseries'
         else:
-            self.psFormat = format
+            self.psFormat = self.format
 
-        self.format = format
 
         if self.saveTrajectories:
             #list of (infoset, action)
@@ -454,6 +459,8 @@ def getMovesImpl(format, req):
 
 
 def prettyPrintMove(jointAction, req):
+    if 'setteam' in jointAction:
+        return jointAction
     action = jointAction.split(',')
     actionText = []
     for k in range(len(action)):

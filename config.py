@@ -34,8 +34,8 @@ probCutoff = 0.03
 numTestGames = 20
 
 #general game config
-#gameName = 'warPoker'
-gameName = 'pokemon'
+gameName = 'warPoker'
+#gameName = 'pokemon'
 
 if gameName == 'warPoker':
     game = games.warPoker
@@ -59,7 +59,10 @@ if gameName == 'warPoker':
     #maximum depth in a traversal before rollout
     depthLimit = None
     #odds of the off player making a random move
-    exploreRate = 0
+    offExploreRate = 0
+    #odds of the on player making a random move
+    #only used if branchingLimit is not none
+    onExploreRate = 0.2
 
     #training
     #number of epochs for training the advantage network
@@ -103,8 +106,7 @@ if gameName == 'warPoker':
     width = 8
 
     #learn rate for training
-    learnRate = 0.001
-    #whether to use a scheduler for the learning rate
+    learnRate = 0.001 #whether to use a scheduler for the learning rate
     useScheduler = True
     #the patience of the schedule (# of epochs before reducing learn rate)
     schedulerPatience = 10
@@ -135,14 +137,17 @@ elif gameName == 'pokemon':
     #which search iteration to start from, None for fresh start (delete data)
     resumeIter = None
     #number of game tree traversals per search iteration
-    innerLoops = 1000
+    innerLoops = 10
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still probed via rollout)
-    branchingLimit = None
+    branchingLimit = 1
     #maximum depth in a traversal before rollout
     depthLimit = None
     #odds of the off player making a random move
-    exploreRate = 0
+    offExploreRate = 0
+    #odds of the on player making a random move
+    #only used if branchingLimit is not none
+    onExploreRate = 0.2
 
     #training
     #number of epochs for training the advantage network
@@ -152,9 +157,9 @@ elif gameName == 'pokemon':
     #maximum number of samples in an epoch
     epochMaxNumSamples = 100000
     #number of samples in a batch
-    miniBatchSize = 4096
+    miniBatchSize = 1024
     #number of workers for the data loader
-    numWorkers = 2
+    numWorkers = 8
     #whether to create a fresh advantage network for each iteration
     newIterNets = True
     singleDeep = True
@@ -163,9 +168,9 @@ elif gameName == 'pokemon':
     #number of bits for numbers in infosets
     numTokenBits = 0
     #maximum size for infoset vocabulary
-    vocabSize = 128
+    vocabSize = 1024
     #size of embedding vector
-    embedSize = 4
+    embedSize = 16
     #dropout rate after embedding during training
     embedDropoutPercent = 0
     #CNN isn't currently implemented
@@ -180,13 +185,13 @@ elif gameName == 'pokemon':
     poolSizes = [13, 5]
     """
     #size of hidden state of the lstm
-    lstmSize = 16
+    lstmSize = 32
     #number of lstm layers
-    numLstmLayers = 1
+    numLstmLayers = 2
     #dropout percentage for the lstm
     lstmDropoutPercent = 0
     #size of each fully connected layer
-    width = 8
+    width = 16
 
     #learn rate for training
     learnRate = 0.001
