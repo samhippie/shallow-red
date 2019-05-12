@@ -7,3 +7,4 @@ cg-run.sh
 data/*
 *.prof
 *.csv
+.vscode/*
