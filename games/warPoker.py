@@ -18,7 +18,7 @@ class _Context:
 def getContext():
     return _Context()
 
-def prettyPrintMove(move, req):
+def prettyPrintMove(move, req=None):
     return move
 
 #our state machine for the game
@@ -157,8 +157,7 @@ class Game:
     def getInfoset(self, player):
         return self.infosets[player]
 
-    #TODO we really should get rid of req
-    async def takeAction(self, player, req, action):
+    async def takeAction(self, player, action):
         if self.verbose:
             print()
             print('state', self.state)

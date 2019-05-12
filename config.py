@@ -2,7 +2,7 @@
 import sys
 
 import games.warPoker
-#import games.pokemon
+import games.pokemon
 
 #This is the file for configuring everything
 
@@ -34,7 +34,8 @@ probCutoff = 0.03
 numTestGames = 20
 
 #general game config
-gameName = 'warPoker'
+#gameName = 'warPoker'
+gameName = 'pokemon'
 
 if gameName == 'warPoker':
     game = games.warPoker
@@ -51,7 +52,7 @@ if gameName == 'warPoker':
     #which search iteration to start from, None for fresh start (delete data)
     resumeIter = None
     #number of game tree traversals per search iteration
-    innerLoops = 100
+    innerLoops = 1000
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still probed via rollout)
     branchingLimit = None
@@ -70,7 +71,7 @@ if gameName == 'warPoker':
     #number of samples in a batch
     miniBatchSize = 4096
     #number of workers for the data loader
-    numWorkers = 8
+    numWorkers = 2
     #whether to create a fresh advantage network for each iteration
     newIterNets = True
     singleDeep = True
@@ -81,7 +82,7 @@ if gameName == 'warPoker':
     #maximum size for infoset vocabulary
     vocabSize = 128
     #size of embedding vector
-    embedSize = 8
+    embedSize = 4
     #dropout rate after embedding during training
     embedDropoutPercent = 0
     #output size of convolutions
@@ -93,13 +94,13 @@ if gameName == 'warPoker':
     #list of (approximate) pooling output sizes (which determines the kernel size)
     poolSizes = [13, 5]
     #size of hidden state of the lstm
-    lstmSize = 32
+    lstmSize = 16
     #number of lstm layers
     numLstmLayers = 1
     #dropout percentage for the lstm
     lstmDropoutPercent = 0
     #size of each fully connected layer
-    width = 16
+    width = 8
 
     #learn rate for training
     learnRate = 0.001
@@ -123,29 +124,84 @@ if gameName == 'warPoker':
 
 
 elif gameName == 'pokemon':
-    #TODO something other than just copying and pasting from war poker
-    """
+    game = games.pokemon
+    GameConfig = Pokemon
+
     #search
-    numProcesses = 0
-    limit = 50
+    #number of search iterations
+    limit = 100
+    #seed for all search games, None for default
     seed = None
+    #which search iteration to start from, None for fresh start (delete data)
     resumeIter = None
-    innerLoops = 200
+    #number of game tree traversals per search iteration
+    innerLoops = 1000
+    #limit on number of branches to take per action in a traversal
+    #(branches not taken are still probed via rollout)
     branchingLimit = None
+    #maximum depth in a traversal before rollout
     depthLimit = None
+    #odds of the off player making a random move
+    exploreRate = 0
 
     #training
-    advEpochs = 1000
-    stratEpochs = 10000
-    miniBatchSize = 4
-    numWorkers = 16
+    #number of epochs for training the advantage network
+    advEpochs = 100
+    #number of epochs for training the strategy network
+    stratEpochs = 5
+    #maximum number of samples in an epoch
+    epochMaxNumSamples = 100000
+    #number of samples in a batch
+    miniBatchSize = 4096
+    #number of workers for the data loader
+    numWorkers = 2
+    #whether to create a fresh advantage network for each iteration
+    newIterNets = True
+    singleDeep = True
 
     #model
-    numTokenBits = 5
-    vocabSize = 100
-    embedSize = 5
-    lstmSize = 128
-    width = 64
-    learnRate = 0.01
-    sampleCacheSize = 1000
+    #number of bits for numbers in infosets
+    numTokenBits = 0
+    #maximum size for infoset vocabulary
+    vocabSize = 128
+    #size of embedding vector
+    embedSize = 4
+    #dropout rate after embedding during training
+    embedDropoutPercent = 0
+    #CNN isn't currently implemented
     """
+    #output size of convolutions
+    convSizes = [16, 32]
+    #kernel sizes of convolutions (should be odd)
+    kernelSizes = [3, 5]
+    #list of convolution layers and depths
+    convDepths = [2, 2]
+    #list of (approximate) pooling output sizes (which determines the kernel size)
+    poolSizes = [13, 5]
+    """
+    #size of hidden state of the lstm
+    lstmSize = 16
+    #number of lstm layers
+    numLstmLayers = 1
+    #dropout percentage for the lstm
+    lstmDropoutPercent = 0
+    #size of each fully connected layer
+    width = 8
+
+    #learn rate for training
+    learnRate = 0.001
+    #whether to use a scheduler for the learning rate
+    useScheduler = True
+    #the patience of the schedule (# of epochs before reducing learn rate)
+    schedulerPatience = 10
+    #what factor to use to reduce the learn rate
+    schedulerFactor = 0.5
+    #what fraction of samples to use for validation
+    valSplit = 0.3
+    #how many samples to cache before writing to disk (give or take)
+    sampleCacheSize = 1000
+    #max size on number of samples (only supported for on-disk sample storage)
+    maxNumSamples = {
+        'adv0': None,
+        'adv1': None,
+    }

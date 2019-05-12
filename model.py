@@ -255,7 +255,7 @@ class LstmNet(nn.Module):
         embedded = self.embeddings(infoset[:,:,0])
         #embedding seems to spit out some pretty low-magnitude vectors
         #so let's try normalizing
-        embedded = F.normalize(embedded, p=2, dim=2)
+        #embedded = F.normalize(embedded, p=2, dim=2)
         if trace:
             print('embedded', embedded, file=sys.stderr)
 

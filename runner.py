@@ -62,30 +62,38 @@ async def trainAndPlay(file=sys.stdout):
             singleDeep=config.singleDeep,
             verbose=config.verboseTraining)
 
-    os.environ['MASTER_ADDR'] = '127.0.0.1'
-    os.environ['MASTER_PORT'] = '29500'
-    dist.init_process_group('gloo', rank=pid, world_size = numProcesses)
+    #if there's only one process, just assume we don't want to train
+    if numProcesses > 1:
 
-    agentGroup = dist.new_group(ranks=list(range(1, numProcesses)))
+        os.environ['MASTER_ADDR'] = '127.0.0.1'
+        os.environ['MASTER_PORT'] = '29500'
+        dist.init_process_group('gloo', rank=pid, world_size = numProcesses)
 
-    if pid == 0:
-        print('setting up net process', file=sys.stderr)
-        if config.resumeIter is None:
-            dataStorage.clearData()
-        dist.barrier()
-        nethandler.run(sharedDict, agent, numProcesses)
+        agentGroup = dist.new_group(ranks=list(range(1, numProcesses)))
+
+        if pid == 0:
+            print('setting up net process', file=sys.stderr)
+            if config.resumeIter is None:
+                dataStorage.clearData()
+            dist.barrier()
+            nethandler.run(sharedDict, agent, numProcesses)
+        else:
+            print('setting up search process', pid, file=sys.stderr)
+            dist.barrier()
+            async with config.game.getContext() as context:
+                await agent.search(
+                    context=context,
+                    pid=pid-1,
+                    limit=config.limit,
+                    innerLoops=config.innerLoops,
+                    distGroup=agentGroup,
+                    seed=config.seed,
+                    history=history)
     else:
-        print('setting up search process', pid, file=sys.stderr)
-        dist.barrier()
-        async with config.game.getContext() as context:
-            await agent.search(
-                context=context,
-                pid=pid-1,
-                limit=config.limit,
-                innerLoops=config.innerLoops,
-                distGroup=agentGroup,
-                seed=config.seed,
-                history=history)
+        #copy in the untrained model for testing
+        #in the future we could optionally load in trained models from the disk
+        agent.oldModels[0] = [agent.advModels[0]]
+        agent.oldModels[1] = [agent.advModels[1]]
 
     if pid != 0:
         return
@@ -133,7 +141,7 @@ async def trainAndPlay(file=sys.stdout):
 
                     action = np.random.choice(actions, p=normProbs)
 
-                    await game.takeAction(player, req, action)
+                    await game.takeAction(player, action)
 
                 await playTurn()
 

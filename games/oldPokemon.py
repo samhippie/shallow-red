@@ -7,6 +7,8 @@ import numpy as np
 import random
 import sys
 
+from full.action import actionMap
+
 #location of the modified ps executable
 PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
 PS_ARG = 'simulate-battle'
@@ -24,23 +26,7 @@ class _Context:
 def getContext():
     return _Context()
 
-#TODO make this better
-#I'd like to split up the more complex actions into simple subactions
-#so for doubles you would select your pokemon separately
-#and your previously selected subactions would be a part of your infoset
-actionMap = {
-    'team 123': 0,
-    'team 213': 1,
-    'team 312': 2,
-    'move 1,pass': 3,
-    'move 2,pass': 4,
-    'move 3,pass': 5,
-    'move 4,pass': 6,
-    'setteam |charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||': 7,
-    'pass,pass': 8
-}
 numActions = len(actionMap)
-
 
 uselessPrefixes = [
     'player', 'teamsize', 'gametype', 'gen', 'tier', 'seed',
@@ -89,14 +75,13 @@ class Game:
 
     #new constructor for the more generic game implementation
     #history is now a set of (seed, action) tuples for each player
-    def __init__(self, context, history=[[],[]], seed=None, saveTrajectories=False, names=['bot1', 'bot2'], verbose=False, file=sys.stdout):
+    def __init__(self, context, format, seed=None, names=['bot1', 'bot2'], history=[[],[]], verbose=False, file=sys.stdout):
         self.ps = context 
-        self.format = config.Pokemon.format
+        self.format = format
         self.seed = seed
         self.names = names
         self.verbose = verbose
         self.file = file
-        self.saveTrajectories = saveTrajectories
 
         self.history = history
 
@@ -112,11 +97,6 @@ class Game:
             self.psFormat = format
 
         self.format = format
-
-        if self.saveTrajectories:
-            #list of (infoset, action)
-            #for each player
-            self.prevTrajectories = [[],[]]
 
 
         #request queues
@@ -153,7 +133,7 @@ class Game:
             del h[player][0]
             if seed != None:
                 await self.sendCmd('>resetPRNG ' + seed)
-            await self.takeAction(player, action)
+            await self.takeAction(player, req, action)
 
 
 
@@ -251,7 +231,8 @@ class Game:
     def getInfoset(self, player):
         return self.infosets[player]
 
-    async def takeAction(self, player, action):
+    #TODO remove req if we're not going to use it
+    async def takeAction(self, player, req, action):
         self.waitingOnAction = False
         self.infosets[player].append(action)
         await self.sendCmd(action, player)
@@ -353,7 +334,7 @@ def getMovesImpl(format, req):
         #for now, we'll just give a pool of teams to pick from
         teams = [
             'setteam |charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||',
-            #'setteam |charmander|leftovers||flamethrower,icebeam,dragondance,hyperbeam|Modest|,,,252,4,252|M||||]|bulbasaur|lifeorb||gigadrain,powerwhip,sludgebomb,rockslide|Adamant|252,252,,,,4|M||||]|squirtle|lifeorb||fakeout,earthquake,hydropump,freezedry|Timid|,4,,252,,252|M||||',
+            'setteam |charmander|leftovers||flamethrower,icebeam,dragondance,hyperbeam|Modest|,,,252,4,252|M||||]|bulbasaur|lifeorb||gigadrain,powerwhip,sludgebomb,rockslide|Adamant|252,252,,,,4|M||||]|squirtle|lifeorb||fakeout,earthquake,hydropump,freezedry|Timid|,4,,252,,252|M||||',
         ]
         return teams
     elif 'win' in req:

@@ -9,6 +9,7 @@ import random
 import sys
 import torch
 import torch.distributed as dist
+import os.path
 
 import config
 import model
@@ -147,43 +148,30 @@ class DeepCfrAgent:
                 #self.advModels[i % 2].net.cuda()
                 #else:
                     #self.advModels[i % 2].shareMemory()
-            #self.trainingBarrier.wait()
+
             distGroup.barrier()
-            #if self.pid != 0:
-            #self.advModels[i % 2].net = self.sharedDict['advNet' + str(i % 2)]
-            #self.advModels[i % 2].net.cuda()
-            #broadcast the new network back out
-            #if self.manageSharedModels:
-            #else:
-                #self.advModels[i % 2].shareMemory()
+            #0 to continue, 1 to stop early
+            if os.path.isfile('stopEarly'):
+                #cant' rename the file here
+                if self.pid == 0:
+                    print('stopping early')
+                break
+
             self.needsTraining = False
 
             if self.pid == 0:
                 print('\nplaying games', file=sys.stderr)
-
             
-        #clear the sample caches so the master agent can train with our data
-        #for sm in self.stratModels:
-            #sm.clearSampleCache()
-
-        #self.trainingBarrier.wait()
         distGroup.barrier()
 
         if self.pid == 0:
+            #have to wait to rename this until all processes have had a chance to see it
+            if os.path.isfile('stopEarly'):
+                os.rename('stopEarly', 'XstopEarly')
             out = torch.zeros(3)
             dist.send(out, dst=0)
             print('playtime is over', file=sys.stderr)
             print(file=sys.stderr)
-
-        """
-        for val in range(2, 15):
-            print('showing regrets for card', val)
-            table = self.advModels[0].values
-            for infoset, action in table:
-                if infoset[2] == str(val):
-                    print((infoset, action), table[(infoset, action)])
-        """
-
 
     def advTrain(self, player, iter=1):
         #send message to net process to train network
@@ -269,13 +257,18 @@ class DeepCfrAgent:
                 for i, p in enumerate(probs):
                     if p < 0:
                         probs[i] = 0
+                pSum = sum(probs)
+                if pSum > 0:
+                    probs /= pSum
+                else:
+                    probs = np.array([1 / len(probs) for p in probs])
                 #probs, ev = self.getPredict(player, infoset)
-                expVal += ev * weight
+                expVal += ev# * weight
                 if(stratProbs is not None):
                     stratProbs += weight * probs
                 else:
                     stratProbs = weight * probs
-            #this is incorrect, but larger expVals still generally mean better predicted outcomes
+
             expVal /= len(self.oldModels[player])
         else:
             sm = self.stratModels[player]
@@ -327,7 +320,7 @@ class DeepCfrAgent:
 
             #if depth == 1 and self.pid == 0:
                 #print('offplayer ' + str(player) + ' hand ' + str(game.hands[player]) + ' probs', list(zip(actions, probs)), file=sys.stderr)
-            await game.takeAction(player, req, action)
+            await game.takeAction(player, action)
 
             if player == 0:
                 newHistory = [history[0] + [(None, action)], history[1]]
@@ -387,7 +380,7 @@ class DeepCfrAgent:
                 #I want to see if we get good results by keeping the RNG the same
                 #this is closer to normal external sampling
                 #seed = await game.resetSeed()
-                await game.takeAction(player, req, action)
+                await game.takeAction(player, action)
                 #historyEntry = (None, player, action)
 
                 if player == 0:
@@ -403,7 +396,7 @@ class DeepCfrAgent:
                 stateExpValue = 0
                 for p,r in zip(probs, rewards):
                     stateExpValue += p * r
-                advantages = [max(0, r - stateExpValue) for r in rewards]
+                advantages = [r - stateExpValue for r in rewards]
                 #if self.pid == 0:
                     #print('infoset', infoset)
                     #print('actions, prob, reward, advantage', *list(zip(actions, probs, rewards, advantages)))
