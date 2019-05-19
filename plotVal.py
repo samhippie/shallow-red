@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 import numpy as np
 import matplotlib.pyplot as plt
+import math
 
 import sys
+
+numRows = 5
 
 if len(sys.argv) == 3:
     lower = int(sys.argv[1])
@@ -41,7 +44,7 @@ for i, (val, train) in enumerate(zip(vals[lower:upper], trains[lower:upper])):
         cur = ep * cur + (1-ep) * t
         avgTrain.append(cur)
 
-    plt.subplot(upper - lower, 1, i+1)
+    plt.subplot(numRows, math.ceil((upper - lower) / numRows), i+1)
     plt.scatter(range(len(val)), val, color='blue')
     plt.scatter(range(len(train)), train, color='green')
     plt.plot(avgVal, label='val smoothed', color='orange')

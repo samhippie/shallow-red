@@ -8,3 +8,4 @@ data/*
 *.prof
 *.csv
 .vscode/*
+saves/*

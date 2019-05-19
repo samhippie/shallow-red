@@ -5,6 +5,8 @@ import games.warPoker
 import games.pokemon
 
 #This is the file for configuring everything
+#there may be some bugs if the size of things in models aren't powers of 2 (or at least even)
+#you have been warned
 
 #game-specific configuration
 class Pokemon:
@@ -52,7 +54,7 @@ if gameName == 'warPoker':
     #which search iteration to start from, None for fresh start (delete data)
     resumeIter = None
     #number of game tree traversals per search iteration
-    innerLoops = 1000
+    innerLoops = 200
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still probed via rollout)
     branchingLimit = None
@@ -63,6 +65,9 @@ if gameName == 'warPoker':
     #odds of the on player making a random move
     #only used if branchingLimit is not none
     onExploreRate = 0.2
+    #how many games to record per training iteration
+    progressGamesToRecord = 5
+    progressGamePath = 'progress/'
 
     #training
     #number of epochs for training the advantage network
@@ -70,11 +75,11 @@ if gameName == 'warPoker':
     #number of epochs for training the strategy network
     stratEpochs = 5
     #maximum number of samples in an epoch
-    epochMaxNumSamples = 100000
+    epochMaxNumSamples = 30000
     #number of samples in a batch
     miniBatchSize = 4096
     #number of workers for the data loader
-    numWorkers = 2
+    numWorkers = 8
     #whether to create a fresh advantage network for each iteration
     newIterNets = True
     singleDeep = True
@@ -87,23 +92,29 @@ if gameName == 'warPoker':
     #size of embedding vector
     embedSize = 4
     #dropout rate after embedding during training
-    embedDropoutPercent = 0
+    embedDropoutPercent = 0.2
+
+    #cnn stuff
+    enableCnn = False
     #output size of convolutions
-    convSizes = [16, 32]
+    convSizes = [8, 16]
     #kernel sizes of convolutions (should be odd)
     kernelSizes = [3, 5]
     #list of convolution layers and depths
-    convDepths = [2, 2]
+    convDepths = [3, 3]
     #list of (approximate) pooling output sizes (which determines the kernel size)
-    poolSizes = [13, 5]
+    poolSizes = [8, 4]
     #size of hidden state of the lstm
     lstmSize = 16
     #number of lstm layers
     numLstmLayers = 1
     #dropout percentage for the lstm
-    lstmDropoutPercent = 0
+    lstmDropoutPercent = 0.2
     #size of each fully connected layer
     width = 8
+
+    #enable an attention later after the lstm
+    enableAttention = True
 
     #learn rate for training
     learnRate = 0.001 #whether to use a scheduler for the learning rate
@@ -131,33 +142,36 @@ elif gameName == 'pokemon':
 
     #search
     #number of search iterations
-    limit = 100
+    limit = 300
     #seed for all search games, None for default
     seed = None
     #which search iteration to start from, None for fresh start (delete data)
     resumeIter = None
     #number of game tree traversals per search iteration
-    innerLoops = 10
+    innerLoops = 20
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still probed via rollout)
     branchingLimit = 1
     #maximum depth in a traversal before rollout
-    depthLimit = None
+    depthLimit = 10
     #odds of the off player making a random move
     offExploreRate = 0
     #odds of the on player making a random move
     #only used if branchingLimit is not none
     onExploreRate = 0.2
+    #how many games to record per training iteration
+    progressGamesToRecord = 6
+    progressGamePath = 'progress/'
 
     #training
     #number of epochs for training the advantage network
-    advEpochs = 100
+    advEpochs = 300
     #number of epochs for training the strategy network
     stratEpochs = 5
     #maximum number of samples in an epoch
-    epochMaxNumSamples = 100000
+    epochMaxNumSamples = 10000
     #number of samples in a batch
-    miniBatchSize = 1024
+    miniBatchSize = 2048
     #number of workers for the data loader
     numWorkers = 8
     #whether to create a fresh advantage network for each iteration
@@ -166,15 +180,16 @@ elif gameName == 'pokemon':
 
     #model
     #number of bits for numbers in infosets
-    numTokenBits = 0
+    numTokenBits = 10
     #maximum size for infoset vocabulary
     vocabSize = 1024
     #size of embedding vector
     embedSize = 16
     #dropout rate after embedding during training
-    embedDropoutPercent = 0
-    #CNN isn't currently implemented
-    """
+    embedDropoutPercent = 0.3
+
+    #cnn stuff
+    enableCnn = False
     #output size of convolutions
     convSizes = [16, 32]
     #kernel sizes of convolutions (should be odd)
@@ -182,16 +197,19 @@ elif gameName == 'pokemon':
     #list of convolution layers and depths
     convDepths = [2, 2]
     #list of (approximate) pooling output sizes (which determines the kernel size)
-    poolSizes = [13, 5]
-    """
+    poolSizes = [100, 20]
+
     #size of hidden state of the lstm
     lstmSize = 32
     #number of lstm layers
     numLstmLayers = 2
     #dropout percentage for the lstm
-    lstmDropoutPercent = 0
+    lstmDropoutPercent = 0.3
     #size of each fully connected layer
     width = 16
+
+    #enable an attention later after the lstm
+    enableAttention = True
 
     #learn rate for training
     learnRate = 0.001

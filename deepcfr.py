@@ -3,6 +3,7 @@
 import asyncio
 import collections
 import copy
+import io
 import math
 import numpy as np
 import random
@@ -59,6 +60,7 @@ class DeepCfrAgent:
         #self.trainingBarrier = trainingBarrier
         self.sharedDict = sharedDict
 
+        #TODO REFACTOR agents no longer need to manage models
         #if the adv models are passed in, assume we aren't responsible for sharing them
         if advModels:
             self.advModels = advModels
@@ -72,12 +74,14 @@ class DeepCfrAgent:
         #else:
             #self.stratModels = [full.model.DeepCfrModel(name='strat' + str(i), softmax=True, writeLock=writeLock, sharedDict=sharedDict) for i in range(2)]
 
+        #TODO REFACTOR everything is single deep
         #whether to save old models for single deep cfr
         self.singleDeep = singleDeep
         if(singleDeep):
             self.oldModels = [[],[]]
             self.oldModelWeights = [[],[]]
 
+        #TODO REFACTOR we should always train
         #flag so if we never search, we don't bother training
         self.needsTraining = False
 
@@ -93,11 +97,13 @@ class DeepCfrAgent:
         for i in range(start, limit):
 
             #this is mainly used for setting a condition breakpoint
-            #there's probably a better way
+            #there's probably a better way 
+            #(there is, it's 'break deepcfr.py:110, i == 3' in pdb)
             #if i == 3:
                 #print('ready for debugging')
 
             #for small games, this is necessary to get a decent number of samples
+            print(self.pid, 'starting search')
             for j in range(innerLoops):
                 if self.pid == 0:
                     print('\rTurn Progress: ' + str(i) + '/' + str(limit) + ' inner ' + str(j) + '/' + str(innerLoops), end='', file=sys.stderr)
@@ -110,6 +116,7 @@ class DeepCfrAgent:
                 game = config.game.Game(context=context, seed=curSeed, history=history, verbose=self.verbose)
                 await game.startGame()
                 await self.cfrRecur(context, game, curSeed, history, i)
+            print(self.pid, 'done with search')
 
 
             #save our adv data after each iteration
@@ -120,29 +127,15 @@ class DeepCfrAgent:
             #for j in range(2):
                 #self.stratModels[j].clearSampleCache()
 
-            #only need to train about once per iteration
-            #self.trainingBarrier.wait()
-
-            #this doesn't actually train
-            #if self.pid != 0:
-                #print('attempting to send train')
-                #self.advTrain(i % 2, iter=i // 2 + 1)
-            #print(self.pid, 'about to hit training barrier')
             dist.barrier(distGroup)
-            #print(self.pid, 'just hit training barrier')
+
             if self.pid == 0:
                 if self.needsTraining:
                     print('sending train message')
                     self.advTrain(i % 2, iter=i // 2 + 1)
-                #if self.manageSharedModels:
-                #self.advModels[i % 2].net.cpu()
-                #self.sharedDict['advNet' + str(i % 2)] = self.advModels[i % 2].net
-                #self.advModels[i % 2].net.cuda()
-                #else:
-                    #self.advModels[i % 2].shareMemory()
 
             distGroup.barrier()
-            #0 to continue, 1 to stop early
+
             if os.path.isfile('stopEarly'):
                 #cant' rename the file here
                 if self.pid == 0:
@@ -182,7 +175,8 @@ class DeepCfrAgent:
             #self.sharedDict['oldModels'] = self.oldModels
             #self.sharedDict['oldModelWeights'] = self.oldModelWeights
 
-        
+
+    #TODO REFACTOR we don't train a strategy network anymore
     def stratTrain(self):
         if(self.singleDeep):
             self.oldModels = self.sharedDict['oldModels']
@@ -219,57 +213,71 @@ class DeepCfrAgent:
     #where a trajectory is a list of infoset-action pairs
     def getReachProb(self, model, traj):
         reachProb = 1
-        for infoset, action in traj:
+        for infoset, actionIndex, numActions in traj:
             probs, _ = model.predict(infoset)
-            actionNum = config.game.enumAction(action)
+            probs = probs[0:numActions]
+            #actionNum = config.game.enumAction(action)
             for i, p in enumerate(probs):
                 if probs[i] < 0:
                     probs[i] = 0
             pSum = sum(probs)
-            if pSum == 0:
-                #this should be 0, but I don't want to divide by zero somewhere down the line
-                reachProb *= 0.001
+            if pSum > 0:
+                reachProb *= probs[actionIndex] / pSum
             else:
-                reachProb *= probs[actionNum] / pSum
-        return reachProb
+                #if pSum is 0, assume we played randomly
+                reachProb *= 1 / numActions
+        #if we have an action that never accumulates any regret, then the models might all spit out 0
+        #which would give a reach probability of 0
+        return max(reachProb, 0.01)
 
     #getting final probabilities for executing a strategy
-    def getProbs(self, player, infoset, actions, prevTrajectory=None):
+    def getProbs(self, player, infoset, actions, prevTrajectory=None, file=sys.stdout):
+        print('infoset', infoset, file=file)
+        #TODO REFACTOR we're always using single deep
         if(self.singleDeep):
             stratProbs = None
             expVal = 0
             weights = []
             model = self.advModels[player]
+            totalWeight = 0
             for i in range(len(self.oldModels[player])):
                 model.net = self.oldModels[player][i]
                 weight = self.oldModelWeights[player][i]
                 reachProb = self.getReachProb(model, prevTrajectory)
                 weight *= reachProb
+                totalWeight += weight
                 probs, ev = model.predict(infoset, trace=False)
-                for i, p in enumerate(probs):
+                print('raw probs', probs, file=file)
+                probs = probs[0:len(actions)]
+                _, bestIndex = max([(p, i) for (i, p) in enumerate(probs)])
+                for j, p in enumerate(probs):
                     if p < 0:
-                        probs[i] = 0
+                        probs[j] = 0
                 pSum = sum(probs)
                 if pSum > 0:
                     probs /= pSum
                 else:
-                    probs = np.array([1 / len(probs) for p in probs])
+                    probs = np.zeros(len(probs))
+                    probs[bestIndex] = 1
+                    #probs = np.array([1 / len(probs) for p in probs])
+                print(self.oldModelWeights[player][i], 'weight', weight, 'probs', probs, file=file)
                 #probs, ev = self.getPredict(player, infoset)
-                expVal += ev# * weight
+                expVal += ev * weight
                 if(stratProbs is not None):
                     stratProbs += weight * probs
                 else:
                     stratProbs = weight * probs
 
-            expVal /= len(self.oldModels[player])
+            if totalWeight > 0:#shouldn't be the case, but who knows what you get from untrained networks
+                expVal /= totalWeight
         else:
             sm = self.stratModels[player]
             stratProbs, expVal = sm.predict(infoset, trace=False)
             #stratProbs, expVal = self.getPredict(sm, infoset)
-        print('infoset', infoset)
-        print('strat probs', stratProbs)
-        print('expVal', expVal)
-        actionNums = [config.game.enumAction(a) for a in actions]
+        print('strat probs', stratProbs, file=file)
+        print('expVal', expVal, file=file)
+        #actionNums = [config.game.enumAction(a) for a in actions]
+        actionNums = list(range(len(actions)))
         probs = []
         for n in actionNums:
             probs.append(stratProbs[n])
@@ -308,16 +316,16 @@ class DeepCfrAgent:
             #get probs so we can sample a single action
             probs, _ = self.regretMatch(offPlayer, infoset, actions, -1)
             exploreProbs = probs * (1 - config.offExploreRate) + config.offExploreRate / len(actions)
-            action = np.random.choice(actions, p=exploreProbs)
+            actionIndex = np.random.choice(len(actions), p=exploreProbs)
 
             #if depth == 1 and self.pid == 0:
                 #print('offplayer ' + str(player) + ' hand ' + str(game.hands[player]) + ' probs', list(zip(actions, probs)), file=sys.stderr)
-            await game.takeAction(player, action)
+            await game.takeAction(player, actionIndex)
 
             if player == 0:
-                newHistory = [history[0] + [(None, action)], history[1]]
+                newHistory = [history[0] + [(None, actionIndex)], history[1]]
             else:
-                newHistory = [history[0], history[1] + [(None, action)]]
+                newHistory = [history[0], history[1] + [(None, actionIndex)]]
 
             onExpValue = await self.cfrRecur(context, game, startSeed, newHistory, iter, depth=depth, rollout=rollout, q=q)
 
@@ -338,8 +346,7 @@ class DeepCfrAgent:
                 #we pick one action according to the current strategy
                 #like this paper, except we also do it when we hit a depth limit
                 #https://poker.cs.ualberta.ca/publications/AAAI12-generalmccfr.pdf
-                actions = [np.random.choice(actions, p=probs)]
-                actionIndices = [0]
+                actionIndices = [np.random.choice(len(actions), p=probs)]
             elif config.branchingLimit:
                 #select a set of actions to pick
                 #chance to play randomly instead of picking the best actions
@@ -361,8 +368,12 @@ class DeepCfrAgent:
                 action = actions[i]
 
                 #use rollout for non-sampled actions
-                if not i in actionIndices:
+                if not i in actionIndices and not rollout:
+                    #always rollout non-sampled actions
                     curRollout = True
+                elif not i in actionIndices:
+                    #if we're rolling out, just pretend the other actions don't exist
+                    continue
                 else:
                     curRollout = rollout
 
@@ -377,13 +388,13 @@ class DeepCfrAgent:
                 #I want to see if we get good results by keeping the RNG the same
                 #this is closer to normal external sampling
                 #seed = await game.resetSeed()
-                await game.takeAction(player, action)
+                await game.takeAction(player, i)
                 #historyEntry = (None, player, action)
 
                 if player == 0:
-                    newHistory = [history[0] + [(None, action)], history[1]]
+                    newHistory = [history[0] + [(None, i)], history[1]]
                 else:
-                    newHistory = [history[0], history[1] + [(None, action)]]
+                    newHistory = [history[0], history[1] + [(None, i)]]
 
                 r = await self.cfrRecur(context, game, startSeed, newHistory, iter, depth=depth+1, rollout=curRollout, q=q*probs[i])
                 rewards.append(r)
@@ -405,7 +416,7 @@ class DeepCfrAgent:
                 #print('advantages', advantages)
 
                 am = self.advModels[onPlayer]
-                am.addSample(infoset, zip(actions, advantages), iter // 2 + 1, stateExpValue)
+                am.addSample(infoset, advantages, iter // 2 + 1, stateExpValue)
 
                 #if depth == 0 and self.pid == 0:
                     #print('player', str(onPlayer), file=sys.stderr)
@@ -427,7 +438,8 @@ class DeepCfrAgent:
         advs, expVal = self.getPredict(player, infoset)
         #illegal actions should be 0
         flatAdvs = np.zeros(len(advs))
-        actionNums = [config.game.enumAction(a) for a in actions]
+        #actionNums = [config.game.enumAction(a) for a in actions]
+        actionNums = list(range(len(actions)))
         probs = []
         for n in actionNums:
             probs.append(max(0, advs[n]))

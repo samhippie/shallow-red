@@ -1,5 +1,5 @@
 
-import inspect
+import time
 import torch.multiprocessing as mp
 import torch.distributed as dist
 import torch
@@ -92,7 +92,7 @@ class MassReceiver:
 #   follow with network input
 #   then recv the results
 #10 is reserved
-def run(sharedDict, agent, numProcesses):
+async def run(agent, numProcesses, playTestGames=None, numTestGames=0):
     receiver = MassReceiver(numProcesses, 3, torch.long)
 
     while True:
@@ -121,11 +121,18 @@ def run(sharedDict, agent, numProcesses):
                 player = msg[1].item()
                 #train
                 agent.advModels[player].clearSampleCache()
-                agent.advModels[player].train(epochs=config.advEpochs)
+                agent.advModels[player].train(iteration=len(agent.oldModels[player]), epochs=config.advEpochs)
                 #save model for later evaluation
                 agent.oldModels[player].append(agent.advModels[player].net)
                 #assume we train once per iteration, so len should equal iteration number
                 agent.oldModelWeights[player].append(len(agent.oldModels[player]))
+
+                if len(agent.oldModels[0]) > 0 and len(agent.oldModels[1]) > 0 and playTestGames:
+                    print('playing test games')
+                    with open(config.progressGamePath + 'progress' + str(len(agent.oldModels[player])) + '-' + config.gameName + '-' + str(round(time.time())) + '.txt', 'w') as f:
+                        await playTestGames(agent, numTestGames, f)
+                else:
+                    print('not playing test games')
 
                 #let agent know we're done
                 out = torch.tensor([1], dtype=torch.long)

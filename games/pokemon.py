@@ -10,6 +10,9 @@ import sys
 
 import config
 
+#TODO finish adding index-based actions after getting it working in warPoker
+#TODO implement saving trajectories so we can calculate reach probabilities
+
 #location of the modified ps executable
 PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
 PS_ARG = 'simulate-battle'
@@ -42,10 +45,12 @@ actionMap = {
     'move 2 1,pass': 4,
     'move 3 1,pass': 5,
     'move 4 1,pass': 6,
-    'setteam |charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||': 7,
+    #'setteam |charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||': 7,
+    'setteam |Bisharp|lifeorb||suckerpunch,taunt,ironhead,falseswipe|Adamant|4,252,,,,252|||||]|Alakazam|aguavberry||disable,hiddenpowerfighting,psychic,knockoff|Modest|4,,,252,,252||,30,,,,|||]|Salazzle|focussash||fireblast,willowisp,sludgewave,disable|Modest|4,,,252,,252||,0,,,,|||': 7,
     'pass,pass': 8
 }
-numActions = len(actionMap)
+#numActions = len(actionMap)
+numActions = 4#len(actionMap)
 
 
 uselessPrefixes = [
@@ -154,11 +159,11 @@ class Game:
                 prefPlayer = None
 
             player, req, actions = await self.getTurn(prefPlayer)
-            seed, action = h[player][0]
+            seed, actionIndex = h[player][0]
             del h[player][0]
             if seed != None:
                 await self.sendCmd('>resetPRNG ' + seed)
-            await self.takeAction(player, action)
+            await self.takeAction(player, actionIndex)
 
 
 
@@ -217,8 +222,16 @@ class Game:
 
                 await self.reqQueues[winPlayer].put({'win': 1})
                 await self.reqQueues[losePlayer].put({'win': -1})
-
                 break
+
+            elif line == '|tie\n':#can't use startswith because of 'tier'
+                winner = line[5:-1]
+                self.winner.set_result(-1)#is setting this to -1 a good idea? let's see if anything breaks
+
+                await self.reqQueues[0].put({'win': 0})
+                await self.reqQueues[1].put({'win': 0})
+                break
+
             else:
                 #public info
                 self.infosets[0] += tokenize(line, 0)
@@ -254,10 +267,23 @@ class Game:
 
     #gets the infoset (i.e. visible history i.e. state) for the given player
     def getInfoset(self, player):
-        return self.infosets[player]
+        if self.curPlayer == player:
+            infoContext = ['OPTIONS']
+            for i, action in enumerate(self.curActions):
+                infoContext.append('@' + str(i))
+                infoContext.append(action)
+            return self.infosets[player] + infoContext
+        else:
+            return self.infosets[player]
 
-    async def takeAction(self, player, action):
+    async def takeAction(self, player, actionIndex):
+        action = self.curActions[actionIndex]
         self.waitingOnAction = False
+        #TODO separate the name of the action from the command
+        #e.g. show the user the names of moves, but send the normal command
+        if self.saveTrajectories:
+            self.prevTrajectories[player].append((copy.copy(self.getInfoset(player)), actionIndex, len(self.curActions)))
+
         self.infosets[player].append(action)
         await self.sendCmd(action, player)
         
@@ -357,7 +383,8 @@ def getMovesImpl(format, req):
     elif 'teambuilding' in req:
         #for now, we'll just give a pool of teams to pick from
         teams = [
-            'setteam |charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||',
+            'setteam |Bisharp|lifeorb||suckerpunch,taunt,ironhead,falseswipe|Adamant|4,252,,,,252|||||]|Alakazam|aguavberry||disable,hiddenpowerfighting,psychic,knockoff|Modest|4,,,252,,252||,30,,,,|||]|Salazzle|focussash||fireblast,willowisp,sludgewave,disable|Modest|4,,,252,,252||,0,,,,|||',
+            #'setteam |charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||',
             #'setteam |charmander|leftovers||flamethrower,icebeam,dragondance,hyperbeam|Modest|,,,252,4,252|M||||]|bulbasaur|lifeorb||gigadrain,powerwhip,sludgebomb,rockslide|Adamant|252,252,,,,4|M||||]|squirtle|lifeorb||fakeout,earthquake,hydropump,freezedry|Timid|,4,,252,,252|M||||',
         ]
         return teams
@@ -496,6 +523,7 @@ def prettyPrintMove(jointAction, req):
 
 
 
+"""
 def enumAction(action):
     #we have to to some modifications to put actions in a consistent format
 
@@ -520,3 +548,4 @@ def enumAction(action):
     action = ','.join(fixedAction)
 
     return actionMap[action]
+"""

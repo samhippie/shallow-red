@@ -54,6 +54,9 @@ class _Game():
         END: [],
     }
 
+#actions no longer have a set index
+#so I'm commenting this out to catch any old code trying to use this
+"""
 enumActionDict = {
     _Game.DEAL: 0,
     _Game.FOLD: 1,
@@ -63,6 +66,7 @@ enumActionDict = {
         
 def enumAction(action):
     return enumActionDict[action]
+"""
 
 def panic():
     print("ERROR THIS SHOULD NEVER HAPPEN", file=sys.stderr)
@@ -83,6 +87,8 @@ class Game:
         self.deck = list(range(2, 15))#offset of 2 because cards start at 2
         self.file = file
         self.saveTrajectories = saveTrajectories
+
+        self.curActions = []
 
         #this won't get set properly until the history is applied
         self.dealer = 0
@@ -109,8 +115,6 @@ class Game:
         #dealer is determined by seed
         self.dealer = self.random.randrange(2)
 
-
-
         self.random.shuffle(self.deck)
         self.hands = [self.deck.pop(), self.deck.pop()]
         for i in range(2):
@@ -122,14 +126,16 @@ class Game:
         h = [copy.copy(self.history[0]), copy.copy(self.history[1])]
         while len(h[0]) or len(h[1]):
             player, req, actions = await self.getTurn()
-            seed, action = h[player][0]
+            seed, actionIndex = h[player][0]
             del h[player][0]
             #ignore the seed, as the cards are already set
-            await self.takeAction(player, action)
+            await self.takeAction(player, actionIndex)
 
     async def getTurn(self):
         if self.state == _Game.START:
-            return (self.dealer, {}, [_Game.DEAL])
+            self.curActions = [_Game.DEAL]
+            self.curPlayer = self.dealer
+            return (self.dealer, {}, self.curActions)
 
         if self.state == _Game.END:
             if self._winner == None:
@@ -141,6 +147,8 @@ class Game:
             if self.verbose:
                 print('winner:', self._winner, 'winnings:', '$' + str(winnings), file=self.file)
             self.winner.set_result((self._winner, winnings))
+            self.curPlayer = self._winner
+            self.curActions = []
             #normalize winnings to between -1 and 1
             return (self._winner, {'win': winnings / 2}, [])
 
@@ -151,20 +159,31 @@ class Game:
 
         actions = _Game.actionDict[self.state]
 
+        self.curActions = actions
+        self.curPlayer = player
+
         return (player, {}, actions)
 
 
     def getInfoset(self, player):
-        return self.infosets[player]
+        if player == self.curPlayer:
+            infoContext = ['OPTIONS']
+            for i, action in enumerate(self.curActions):
+                infoContext.append('@' + str(i))
+                infoContext.append(action)
+            return self.infosets[player] + infoContext
+        else:
+            return self.infosets[player]
 
-    async def takeAction(self, player, action):
+    async def takeAction(self, player, actionIndex):
+        action = self.curActions[actionIndex]
         if self.verbose:
-            print()
-            print('state', self.state)
             print('player', player+1, 'takes action', action, file=self.file)
             print('bet:', self.bet, 'pot', self.pot, file=self.file)
         if self.saveTrajectories:
-            self.prevTrajectories[player].append((copy.copy(self.infosets[player]), action))
+            self.prevTrajectories[player].append((copy.copy(self.getInfoset(player)), actionIndex, len(self.curActions)))
+
+        self.curActions = []
         #all actions are public
         for i in range(2):
             #infosets are always in first person

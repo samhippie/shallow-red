@@ -94,8 +94,7 @@ class SimpleNet(nn.Module):
 
 
     def forward(self, infoset, lengths=None, trace=False):
-        #I'm trying to be pretty aggressive about deleting things
-        #as it's easy to run out of gpu memory with large sequences
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
         isSingle = False
         if len(infoset.shape) == 2:
@@ -117,7 +116,7 @@ class SimpleNet(nn.Module):
         #embedded = self.dropE(embedded)
         #replace the hash with the embedded vector
         embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
-        del infoset
+        #del infoset
 
         x = F.pad(embedded, (0,0, 0,self.inputSize - embedded.shape[1]))
         x = torch.cat(tuple(x.transpose(0,1)), 1)
@@ -193,45 +192,49 @@ class LstmNet(nn.Module):
 
         self.dropout = nn.Dropout(config.embedDropoutPercent)
 
-        """
-        convLayers = []
-        convBatchNorms = []
-        for i, depth in enumerate(config.convDepths):
-            convs = []
-            convsBn = []
-            for j in range(depth):
-                if i == 0 and j == 0:
-                    #input from embedding
-                    inputSize = config.embedSize + config.numTokenBits
-                elif j == 0:
-                    #input from previous layer
-                    inputSize = config.convSizes[i-1]
-                else:
-                    #input from current layer
-                    inputSize = config.convSizes[i]
-                #TODO make the stride configurable per layer so we can reduce the sequence length
-                k = config.kernelSizes[i]
-                p = k + 1 // 2
-                conv = nn.Conv1d(inputSize, config.convSizes[i], kernel_size=k, stride=1, padding=p)
-                convs.append(conv)
-                convsBn.append(nn.BatchNorm1d(config.convSizes[i]))
-            convLayers.append(nn.ModuleList(convs))
-            convBatchNorms.append(nn.ModuleList(convsBn))
-        self.convLayers = nn.ModuleList(convLayers)
-        self.convBatchNorms = nn.ModuleList(convBatchNorms)
-        """
+        if config.enableCnn:
+            convLayers = []
+            convBatchNorms = []
+            for i, depth in enumerate(config.convDepths):
+                convs = []
+                convsBn = []
+                for j in range(depth):
+                    if i == 0 and j == 0:
+                        #input from embedding
+                        inputSize = config.embedSize + config.numTokenBits
+                    elif j == 0:
+                        #input from previous layer
+                        inputSize = config.convSizes[i-1]
+                    else:
+                        #input from current layer
+                        inputSize = config.convSizes[i]
+                    #TODO make the stride configurable per layer so we can reduce the sequence length
+                    k = config.kernelSizes[i]
+                    p = k + 1 // 2
+                    conv = nn.Conv1d(inputSize, config.convSizes[i], kernel_size=k, stride=1, padding=p)
+                    convs.append(conv)
+                    convsBn.append(nn.BatchNorm1d(config.convSizes[i]))
+                convLayers.append(nn.ModuleList(convs))
+                convBatchNorms.append(nn.ModuleList(convsBn))
+            self.convLayers = nn.ModuleList(convLayers)
+            self.convBatchNorms = nn.ModuleList(convBatchNorms)
 
         #LSTM to process infoset via the embeddings
-        #self.lstm = nn.LSTM(config.convSizes[-1], config.lstmSize, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, batch_first=True)
-        self.lstm = nn.LSTM(config.embedSize + config.numTokenBits, config.lstmSize, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, batch_first=True)
+        if config.enableCnn:
+            self.lstm = nn.LSTM(config.convSizes[-1], config.lstmSize // 2, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, bidirectional=True, batch_first=True)
+        else:
+            self.lstm = nn.LSTM(config.embedSize + config.numTokenBits, config.lstmSize // 2, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, bidirectional=True, batch_first=True)
 
         #attention
-        self.attn = nn.Linear(2 * config.lstmSize, config.lstmSize)
-        self.attn2 = nn.Linear(config.lstmSize, config.lstmSize)
+        if config.enableAttention:
+            self.attn = nn.Linear(2 * config.lstmSize, config.lstmSize)
+            self.attn2 = nn.Linear(config.lstmSize, config.lstmSize)
 
         #simple feed forward for final part
-        self.fc1 = nn.Linear(config.lstmSize, config.width)
-        #self.fc1 = nn.Linear(config.convSizes[-1], config.width)
+        if config.enableCnn:
+            self.fc1 = nn.Linear(config.lstmSize, config.width)
+        else:
+            self.fc1 = nn.Linear(config.convSizes[-1], config.width)
         self.fc2 = nn.Linear(config.width, config.width)
         self.fc3 = nn.Linear(config.width, config.width)
         self.fc6 = nn.Linear(config.width, self.outputSize)
@@ -243,6 +246,8 @@ class LstmNet(nn.Module):
     def forward(self, infoset, lengths=None, trace=False):
         #I'm trying to be pretty aggressive about deleting things
         #as it's easy to run out of gpu memory with large sequences
+
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
         isSingle = False
         if len(infoset.shape) == 2:
@@ -262,75 +267,86 @@ class LstmNet(nn.Module):
         embedded = self.dropout(embedded)
         #replace the hash with the embedded vector
         embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
-        del infoset
+        #del infoset
 
-        """
-        x = torch.transpose(embedded, 1, 2)
-        for i, convs in enumerate(self.convLayers):
-            for j, conv in enumerate(convs):
-                x = conv(x)
-                x = self.convBatchNorms[i][j](x)
-                x = F.relu(x)
-            kernelSize = min(max(1, x.shape[2] // config.poolSizes[i]), x.shape[2])
-            x = F.max_pool1d(x, kernelSize)
+        if config.enableCnn:
+            x = torch.transpose(embedded, 1, 2)
+            #print('x shape', x.shape)
+            for i, convs in enumerate(self.convLayers):
+                for j, conv in enumerate(convs):
+                    x = conv(x)
+                    #print('x after conv shape', x.shape)
+                    #x = self.convBatchNorms[i][j](x)
+                    x = F.relu(x)
+                kernelSize = min(max(1, x.shape[2] // config.poolSizes[i]), x.shape[2])
+                x = F.max_pool1d(x, kernelSize)
+                #print('x after pooling shape', x.shape)
 
-        x = torch.transpose(x, 1, 2)
-        #x = x.squeeze(2)
+            lstmInput = torch.transpose(x, 1, 2)
+            #print('x about to lstm shape', x.shape)
+            #why is this here? leave this commented out unless it starts giving use trouble
+            #x = x.squeeze(2)
 
-        #with convolutions, the lengths of the sequences are going to be messed up anyway
-        #so it's probably fine to just take all sequences in a batch to be the same length
-        """
-
-        #"""
-        #lengths are passed in if we have to worry about padding
-        #https://towardsdatascience.com/taming-lstms-variable-sized-mini-batches-and-why-pytorch-is-good-for-your-health-61d35642972e
-        if lengths is not None:
-            lstmInput = torch.nn.utils.rnn.pack_padded_sequence(embedded, lengths, batch_first=True)
         else:
-            lstmInput = embedded
-        #"""
+            #lengths are passed in if we have to worry about padding
+            #https://towardsdatascience.com/taming-lstms-variable-sized-mini-batches-and-why-pytorch-is-good-for-your-health-61d35642972e
+            if lengths is not None:
+                lstmInput = torch.nn.utils.rnn.pack_padded_sequence(embedded, lengths, batch_first=True)
+            else:
+                lstmInput = embedded
 
         #remember that we set batch_first to be true
-        #"""
         x, _ = self.lstm(lstmInput)
-        #"""
-        """
-        x, _ = self.lstm(x)
-        """
 
         #get the final output of the lstm
-        #"""
-        if lengths is not None:
-            #have to account for padding/packing
-            x, lengths = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
-            lasts = x[torch.arange(0, x.shape[0]), lengths-1]
-        else:
+
+        if config.enableCnn:
+            #with convolutions, the lengths of the sequences are going to be messed up anyway
+            #so it's probably fine to just take all sequences in a batch to be the same length
             lasts = x[:,-1]
-        #"""
-        """
-        lasts = x[:,-1]
-        """
+        else:
+            if lengths is not None:
+                #have to account for padding/packing
+                #don't use the lengths this returns, as it put it on the cpu instead of cuda
+                #and we need the lengths for cuda stuff
+                x, _ = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
+                lasts = x[torch.arange(0, x.shape[0], device=device), lengths-1]
+            else:
+                lasts = x[:,-1]
 
         if trace:
             print('lasts', lasts, file=sys.stderr)
-        #use both input and output of lstm to get attention weights
-        #keep the batch size, but add extra dimension for sequence length
-        lasts = lasts[:, None, :]
-        #repeat the last output so it matches the sequence length
-        lasts = lasts.repeat(1, x.shape[1], 1)
-        #feed the output of the lstm appended with the final output to the attention layer
-        xWithContext = torch.cat([x, lasts], 2)
-        outattn = F.relu(self.attn(xWithContext))
-        outattn = self.attn2(outattn)
-        #softmax so the weights for each element of each output add up to 1
-        outattn = F.softmax(outattn, dim=1)
-        #apply the weights to each output
-        #x and outattn are the same shape, so this is easy
-        #if we padded, then the padding outputs in x are 0, so they don't contribute to the sum
-        #so it just works
-        x = x * outattn
-        #sum along the sequence
-        x = torch.sum(x, dim=1)
+
+        if config.enableAttention:
+            #use both input and output of lstm to get attention weights
+            #keep the batch size, but add extra dimension for sequence length
+            lasts = lasts[:, None, :]
+            #repeat the last output so it matches the sequence length
+            lasts = lasts.repeat(1, x.shape[1], 1)
+            #feed the output of the lstm appended with the final output to the attention layer
+            xWithContext = torch.cat([x, lasts], 2)
+            outattn = F.relu(self.attn(xWithContext))
+            outattn = self.attn2(outattn)
+            #mask out the padded values (cnns don't have padded values)
+            if not config.enableCnn and lengths is not None:
+                #http://juditacs.github.io/2018/12/27/masked-attention.html
+                #we're setting padding values to -inf to get softmaxed to 0, so we want to mask out the real data
+                #hence >= instead of >
+                mask = torch.arange(outattn.shape[1], device=device)[None, :] >= lengths[:, None]
+                outattn[mask] = float('-inf')
+
+            #softmax so the weights for each element of each output add up to 1
+            outattn = F.softmax(outattn, dim=1)
+            #apply the weights to each output
+            #x and outattn are the same shape, so this is easy
+            #if we padded, then the padding outputs in x are 0, so they don't contribute to the sum
+            #so it just works
+            x = x * outattn
+            #sum along the sequence
+            x = torch.sum(x, dim=1)
+        else:
+            x = lasts
+
         if trace:
             print('x to fc', x, file=sys.stderr)
 
@@ -403,12 +419,13 @@ class DeepCfrModel:
     #are almost the same (modelInput.numActions)
     #strategy is softmaxed, advantage is not
 
-    def __init__(self, name, softmax, writeLock, sharedDict, useNet=True):
+    def __init__(self, name, softmax, writeLock, sharedDict, saveFile=None, useNet=True):
         self.softmax = softmax
         self.lr = config.learnRate
         self.writeLock = writeLock
         self.sharedDict = sharedDict
         self.outputSize = config.game.numActions
+        self.saveFile = saveFile
 
         if(useNet):
             self.net = Net(softmax=softmax)
@@ -430,10 +447,13 @@ class DeepCfrModel:
         #infosetTensor = np.array([hash(token) for token in infoset], dtype=np.long)
         infosetTensor = infosetToTensor(infoset)
 
-        labelTensor = np.zeros(self.outputSize + 1)
-        for action, value in label:
+        #this could be cleaned up now that we're using action indices
+        #fill the tensor with -1, which means that actions without labels are considered bad instead of neutral
+        #this doesn't make sense for softmaxed values, but we haven't softmaxed in months
+        labelTensor = -1 * np.ones(self.outputSize + 1)
+        for n, value in enumerate(label):
             #print(action, value)
-            n = config.game.enumAction(action)
+            #n = config.game.enumAction(action)
             labelTensor[n] = value
         labelTensor[-1] = expValue
         #print('saving label', labelTensor)
@@ -456,6 +476,23 @@ class DeepCfrModel:
         #make sure we save everything first
         #so we can use the same training data in the future
         self.clearSampleCache()
+
+    #saving/loading models for inference
+    #once we save or load a model, we shouldn't train on it
+    #so we just save enough information for inference
+
+    def saveModel(self, n):
+        if self.saveFile:
+            path = self.saveFile + 'model.' + self.name  + '.' + str(n) + '.pt'
+            print('saving model to', path, file=sys.stderr)
+            torch.save(self.net.state_dict(), path)
+
+    def loadModel(self, n):
+        if self.saveFile:
+            path = self.saveFile + 'model.' + self.name  + '.' + str(n) + '.pt'
+            print('loading model', path, file=sys.stderr)
+            self.net.load_state_dict(torch.load(path))
+            self.net.eval()
 
     #infosets is a list of tensors
     def batchPredict(self, infosets, convertToTensor=True, trace=False):
@@ -508,7 +545,7 @@ class DeepCfrModel:
         data = self.net(data, trace=trace).cpu().detach().numpy()
         return data[0:-1], data[-1]
 
-    def train(self, epochs=1):
+    def train(self, iteration, epochs=1):
         #move from write cache to db
         self.clearSampleCache()
 
@@ -713,6 +750,11 @@ class DeepCfrModel:
         print('\n', file=sys.stderr)
 
         self.net.train(False)
+
+        self.saveModel(iteration)
+
+
+
         #warPoker examples
         """
         exampleInfoSets = [
