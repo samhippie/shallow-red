@@ -5,8 +5,7 @@ import games.warPoker
 import games.pokemon
 
 #This is the file for configuring everything
-#there may be some bugs if the size of things in models aren't powers of 2 (or at least even)
-#you have been warned
+#there may be some bugs if the size of things in models aren't powers of 2 (or at least even) #you have been warned
 
 #game-specific configuration
 class Pokemon:
@@ -33,11 +32,11 @@ bigCache = False
 #ignore moves with probabilities below this (likely just noise)
 probCutoff = 0.03
 #how many games to play after training
-numTestGames = 20
+numTestGames = 1000000
 
 #general game config
-gameName = 'warPoker'
-#gameName = 'pokemon'
+#gameName = 'warPoker'
+gameName = 'pokemon'
 
 if gameName == 'warPoker':
     game = games.warPoker
@@ -56,8 +55,10 @@ if gameName == 'warPoker':
     #number of game tree traversals per search iteration
     innerLoops = 200
     #limit on number of branches to take per action in a traversal
-    #(branches not taken are still probed via rollout)
+    #(branches not taken are still possibly probed via rollout)
     branchingLimit = None
+    #whether to probe branches not taken
+    enableProbingRollout=True
     #maximum depth in a traversal before rollout
     depthLimit = None
     #odds of the off player making a random move
@@ -104,12 +105,13 @@ if gameName == 'warPoker':
     convDepths = [3, 3]
     #list of (approximate) pooling output sizes (which determines the kernel size)
     poolSizes = [8, 4]
-    #size of hidden state of the lstm
-    lstmSize = 16
+
+    #size of hidden state of the lstm (split in half if we're using a bidirection lstm)
+    lstmSize = 32
     #number of lstm layers
     numLstmLayers = 1
     #dropout percentage for the lstm
-    lstmDropoutPercent = 0.2
+    lstmDropoutPercent = 0
     #size of each fully connected layer
     width = 8
 
@@ -148,12 +150,14 @@ elif gameName == 'pokemon':
     #which search iteration to start from, None for fresh start (delete data)
     resumeIter = None
     #number of game tree traversals per search iteration
-    innerLoops = 20
+    innerLoops = 30
     #limit on number of branches to take per action in a traversal
-    #(branches not taken are still probed via rollout)
+    #(branches not taken are still possibly probed via rollout)
     branchingLimit = 1
+    #whether to probe branches not taken
+    enableProbingRollout=True
     #maximum depth in a traversal before rollout
-    depthLimit = 10
+    depthLimit = 20
     #odds of the off player making a random move
     offExploreRate = 0
     #odds of the on player making a random move
@@ -169,7 +173,7 @@ elif gameName == 'pokemon':
     #number of epochs for training the strategy network
     stratEpochs = 5
     #maximum number of samples in an epoch
-    epochMaxNumSamples = 10000
+    epochMaxNumSamples = 30000
     #number of samples in a batch
     miniBatchSize = 2048
     #number of workers for the data loader
@@ -182,31 +186,31 @@ elif gameName == 'pokemon':
     #number of bits for numbers in infosets
     numTokenBits = 10
     #maximum size for infoset vocabulary
-    vocabSize = 1024
+    vocabSize = 4096
     #size of embedding vector
-    embedSize = 16
+    embedSize = 8
     #dropout rate after embedding during training
-    embedDropoutPercent = 0.3
+    embedDropoutPercent = 0
 
     #cnn stuff
     enableCnn = False
     #output size of convolutions
-    convSizes = [16, 32]
+    convSizes = [8, 16, 32]
     #kernel sizes of convolutions (should be odd)
-    kernelSizes = [3, 5]
+    kernelSizes = [3, 5, 7]
     #list of convolution layers and depths
-    convDepths = [2, 2]
+    convDepths = [3, 3, 3]
     #list of (approximate) pooling output sizes (which determines the kernel size)
-    poolSizes = [100, 20]
+    poolSizes = [128, 64, 16]
 
     #size of hidden state of the lstm
-    lstmSize = 32
+    lstmSize = 48
     #number of lstm layers
-    numLstmLayers = 2
+    numLstmLayers = 1
     #dropout percentage for the lstm
-    lstmDropoutPercent = 0.3
+    lstmDropoutPercent = 0
     #size of each fully connected layer
-    width = 16
+    width = 32
 
     #enable an attention later after the lstm
     enableAttention = True

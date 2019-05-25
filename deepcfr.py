@@ -247,7 +247,7 @@ class DeepCfrAgent:
                 weight *= reachProb
                 totalWeight += weight
                 probs, ev = model.predict(infoset, trace=False)
-                print('raw probs', probs, file=file)
+                #print('raw probs', probs, file=file)
                 probs = probs[0:len(actions)]
                 _, bestIndex = max([(p, i) for (i, p) in enumerate(probs)])
                 for j, p in enumerate(probs):
@@ -260,7 +260,7 @@ class DeepCfrAgent:
                     probs = np.zeros(len(probs))
                     probs[bestIndex] = 1
                     #probs = np.array([1 / len(probs) for p in probs])
-                print(self.oldModelWeights[player][i], 'weight', weight, 'probs', probs, file=file)
+                #print(self.oldModelWeights[player][i], 'weight', weight, 'probs', probs, file=file)
                 #probs, ev = self.getPredict(player, infoset)
                 expVal += ev * weight
                 if(stratProbs is not None):
@@ -369,7 +369,10 @@ class DeepCfrAgent:
 
                 #use rollout for non-sampled actions
                 if not i in actionIndices and not rollout:
-                    #always rollout non-sampled actions
+                    if not config.enableProbingRollout:
+                        rewards.append(0)
+                        continue
+                    #rollout non-sampled actions
                     curRollout = True
                 elif not i in actionIndices:
                     #if we're rolling out, just pretend the other actions don't exist
