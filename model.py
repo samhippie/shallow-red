@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-#from apex import amp
+from apex import amp
 from hashembed.embedding import HashEmbedding
 import io
 import math
@@ -21,7 +21,7 @@ import time
 import dataStorage
 import config
 
-#amp_handle = amp.init()
+AMP_OPT_LEVEL = "O1"
 
 #how many bits are used to represent numbers in tokens
 NUM_TOKEN_BITS = config.numTokenBits
@@ -192,7 +192,20 @@ class LstmNet(nn.Module):
 
         self.dropout = nn.Dropout(config.embedDropoutPercent)
 
+        """
+        convSize = config.embedSize + config.numTokenBits
+        self.conv1 = nn.Conv1d(convSize, convSize, kernel_size=3, stride=1, padding=1)
+        self.conv1Dropout = nn.Dropout(0.5)
+        self.bn1 = nn.BatchNorm1d(convSize)
+        self.conv2 = nn.Conv1d(convSize, convSize, kernel_size=3, stride=1, padding=1)
+        self.conv2Dropout = nn.Dropout(0.5)
+        self.bn2 = nn.BatchNorm1d(convSize)
+        self.conv3 = nn.Conv1d(convSize, convSize, kernel_size=3, stride=1, padding=1)
+        self.conv3Dropout = nn.Dropout(0.5)
+        """
+
         if config.enableCnn:
+
             convLayers = []
             convBatchNorms = []
             for i, depth in enumerate(config.convDepths):
@@ -221,20 +234,23 @@ class LstmNet(nn.Module):
 
         #LSTM to process infoset via the embeddings
         if config.enableCnn:
-            self.lstm = nn.LSTM(config.convSizes[-1], config.lstmSize // 2, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, bidirectional=True, batch_first=True)
+            self.lstm = nn.LSTM(config.convSizes[-1], config.lstmSize, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, bidirectional=False, batch_first=True)
         else:
-            self.lstm = nn.LSTM(config.embedSize + config.numTokenBits, config.lstmSize // 2, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, bidirectional=True, batch_first=True)
+            self.lstm = nn.GRU(config.embedSize + config.numTokenBits, config.lstmSize, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, bidirectional=False, batch_first=True)
 
         #attention
         if config.enableAttention:
-            self.attn = nn.Linear(2 * config.lstmSize, config.lstmSize)
-            self.attn2 = nn.Linear(config.lstmSize, config.lstmSize)
+            self.attn1 = nn.Linear(2 * config.lstmSize, config.lstmSize)
+            #self.attn2 = nn.Linear(2 * config.lstmSize, config.lstmSize)
+            #self.attn3 = nn.Linear(2 * config.lstmSize, config.lstmSize)
+
+        self.lstmDropout = nn.Dropout(0)
 
         #simple feed forward for final part
-        if config.enableCnn:
-            self.fc1 = nn.Linear(config.lstmSize, config.width)
-        else:
-            self.fc1 = nn.Linear(config.convSizes[-1], config.width)
+        self.fc1 = nn.Linear(config.lstmSize, config.width)
+        #if we want to skip the lstm, I think
+        #which we don't currently support
+        #self.fc1 = nn.Linear(config.convSizes[-1], config.width)
         self.fc2 = nn.Linear(config.width, config.width)
         self.fc3 = nn.Linear(config.width, config.width)
         self.fc6 = nn.Linear(config.width, self.outputSize)
@@ -244,9 +260,6 @@ class LstmNet(nn.Module):
         self.fcValOut = nn.Linear(config.width, 1)
 
     def forward(self, infoset, lengths=None, trace=False):
-        #I'm trying to be pretty aggressive about deleting things
-        #as it's easy to run out of gpu memory with large sequences
-
         device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
 
         isSingle = False
@@ -266,8 +279,66 @@ class LstmNet(nn.Module):
 
         embedded = self.dropout(embedded)
         #replace the hash with the embedded vector
-        embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
+        embedded = torch.cat((embedded, infoset[:,:, 1:].to(dtype=embedded.dtype)), 2)
         #del infoset
+
+        #go through a couple conv layers
+        #need to mask out the part proportional to the initial lengths in the conv output
+        #so we can keep the garbage out here and in the lstm layer
+        #if lengths is None, then there is no padding and no point in masking
+        """
+        x = torch.transpose(embedded, 1, 2)
+        #preLength = x.shape[2]
+        x = self.bn1(x)
+        x = F.relu(self.conv1(x)) + x
+        x = self.conv1Dropout(x)
+        x = F.relu(self.conv2(x)) + x
+        x = self.conv1Dropout(x)
+        x = F.relu(self.conv3(x)) + x
+        x = self.conv1Dropout(x)
+        x = torch.transpose(x, 1, 2)
+
+        if lengths is not None:
+            lengths = lengths.float()
+            lengths *= x.shape[2] / preLength
+            lengths += 1
+            lengths = lengths.long()
+            x = torch.transpose(x, 1, 2)
+            mask = torch.arange(x.shape[1], device=device)[None, :] >= lengths[:, None]
+            x[mask] = 0
+            x = torch.transpose(x, 1, 2)
+            preLength = x.shape[2]
+
+        x = F.relu(self.conv2(x))
+        x = self.bn2(x)
+        x = self.conv2Dropout(x)
+
+        if lengths is not None:
+            lengths = lengths.float()
+            lengths *= x.shape[2] / preLength
+            lengths += 1
+            lengths = lengths.long()
+            x = torch.transpose(x, 1, 2)
+            mask = torch.arange(x.shape[1], device=device)[None, :] >= lengths[:, None]
+            x[mask] = 0
+            x = torch.transpose(x, 1, 2)
+
+        x = F.relu(self.conv3(x))
+        x = self.conv2Dropout(x)
+
+        if lengths is not None:
+            lengths = lengths.float()
+            lengths *= x.shape[2] / preLength
+            lengths += 1
+            lengths = lengths.long()
+            x = torch.transpose(x, 1, 2)
+            mask = torch.arange(x.shape[1], device=device)[None, :] >= lengths[:, None]
+            x[mask] = 0
+        else:
+            x = torch.transpose(x, 1, 2)
+        """
+
+
 
         if config.enableCnn:
             x = torch.transpose(embedded, 1, 2)
@@ -275,9 +346,9 @@ class LstmNet(nn.Module):
             for i, convs in enumerate(self.convLayers):
                 for j, conv in enumerate(convs):
                     x = conv(x)
-                    #print('x after conv shape', x.shape)
                     #x = self.convBatchNorms[i][j](x)
                     x = F.relu(x)
+                    #print('x after conv shape', x.shape)
                 kernelSize = min(max(1, x.shape[2] // config.poolSizes[i]), x.shape[2])
                 x = F.max_pool1d(x, kernelSize)
                 #print('x after pooling shape', x.shape)
@@ -325,27 +396,32 @@ class LstmNet(nn.Module):
             lasts = lasts.repeat(1, x.shape[1], 1)
             #feed the output of the lstm appended with the final output to the attention layer
             xWithContext = torch.cat([x, lasts], 2)
-            outattn = F.relu(self.attn(xWithContext))
-            outattn = self.attn2(outattn)
+            outattn1 = self.attn1(xWithContext)
+            #outattn2 = self.attn2(xWithContext)
+            #outattn3 = self.attn3(xWithContext)
             #mask out the padded values (cnns don't have padded values)
             if not config.enableCnn and lengths is not None:
                 #http://juditacs.github.io/2018/12/27/masked-attention.html
                 #we're setting padding values to -inf to get softmaxed to 0, so we want to mask out the real data
                 #hence >= instead of >
-                mask = torch.arange(outattn.shape[1], device=device)[None, :] >= lengths[:, None]
-                outattn[mask] = float('-inf')
+                mask = torch.arange(outattn1.shape[1], device=device)[None, :] >= lengths[:, None]
+                outattn1[mask] = float('-inf')
+                #outattn2[mask] = float('-inf')
+                #outattn3[mask] = float('-inf')
 
             #softmax so the weights for each element of each output add up to 1
-            outattn = F.softmax(outattn, dim=1)
-            #apply the weights to each output
-            #x and outattn are the same shape, so this is easy
-            #if we padded, then the padding outputs in x are 0, so they don't contribute to the sum
-            #so it just works
-            x = x * outattn
+            outattn1 = F.softmax(outattn1, dim=1)
+            #outattn2 = F.softmax(outattn2, dim=1)
+            #outattn1 = F.softmax(outattn3, dim=1)
             #sum along the sequence
-            x = torch.sum(x, dim=1)
+            x = torch.sum(x * outattn1, dim=1)
+            #x2 = torch.sum(x * outattn2, dim=1)
+            #x3 = torch.sum(x * outattn3, dim=1)
+            #x = torch.cat([x1, x2, x3], dim=1)
         else:
             x = lasts
+
+        x = self.lstmDropout(x)
 
         if trace:
             print('x to fc', x, file=sys.stderr)
@@ -353,10 +429,10 @@ class LstmNet(nn.Module):
         xVal = x
         x = F.relu(self.fc1(x))
         #2 and 3 have skip connections, as they have the same sized input and output
-        #x = F.relu(self.fc2(x) + x)
-        x = F.relu(self.fc2(x))
-        #x = F.relu(self.fc3(x) + x)
-        x = F.relu(self.fc3(x))
+        x = F.relu(self.fc2(x) + x)
+        #x = F.relu(self.fc2(x))
+        x = F.relu(self.fc3(x) + x)
+        #x = F.relu(self.fc3(x))
         #deep cfr does normalization here
         #I'm not sure if this is the right kind of normalization
         #x = F.normalize(x, p=2, dim=1)
@@ -367,7 +443,7 @@ class LstmNet(nn.Module):
 
         #value output
         xVal = F.relu(self.fcVal1(xVal))
-        xVal = F.relu(self.fcVal2(xVal))
+        xVal = F.relu(self.fcVal2(xVal) + xVal)
         xVal = self.fcValOut(xVal)
 
         if isSingle:
@@ -428,8 +504,9 @@ class DeepCfrModel:
         self.saveFile = saveFile
 
         if(useNet):
-            self.net = Net(softmax=softmax)
+            self.net = Net(softmax=softmax).cuda()
             self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+            self.net, self.optimizer = amp.initialize(self.net, self.optimizer, opt_level=AMP_OPT_LEVEL)
             #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
 
@@ -522,9 +599,9 @@ class DeepCfrModel:
             #lengths = lengths.to(device)
             #print('padded', padded, file=sys.stderr)
             #print('lengths', lengths, file=sys.stderr)
-            out = self.net(padded, lengths=lengths, trace=trace)
+            out = self.net(padded, lengths=lengths, trace=trace)#.float()
             #unsort with scatter
-            unsortedOut = torch.zeros(out.shape).to(device)
+            unsortedOut = torch.zeros(out.shape).to(device).to(dtype=out.dtype)
             #print('out', out)
             indices = indices.unsqueeze(1).expand(-1, out.shape[1])
             #print('expaned indices', indices)
@@ -533,7 +610,7 @@ class DeepCfrModel:
         else:
             batch[0] = batch[0].to(device)
             out = self.net(batch[0], trace=trace)
-            return out.unsqueeze(0)
+            return out.unsqueeze(0).float()
 
 
     def predict(self, infoset, convertToTensor=True, trace=False):
@@ -542,7 +619,7 @@ class DeepCfrModel:
         #device = torch.device('cpu')
         self.net = self.net.to(device)
         data = data.to(device)
-        data = self.net(data, trace=trace).cpu().detach().numpy()
+        data = self.net(data, trace=trace).float().cpu().detach().numpy()
         return data[0:-1], data[-1]
 
     def train(self, iteration, epochs=1):
@@ -556,16 +633,15 @@ class DeepCfrModel:
             newNet = Net(softmax=self.softmax)
             #embedding should be preserved across iterations
             #but we want a fresh start for the strategy
-            #newNet.embeddings = self.net.embeddings
-            #maybe not, if we're going to be using the old net in the future
+            newNet.load_state_dict(self.net.state_dict())
             self.net = newNet
 
 
         self.net = self.net.to(device)
         self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+        self.net, self.optimizer = amp.initialize(self.net, self.optimizer, opt_level=AMP_OPT_LEVEL)
         #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
-        miniBatchSize = config.miniBatchSize
         self.net.train(True)
 
         #used for scheduling
@@ -587,13 +663,21 @@ class DeepCfrModel:
         #trainSampler = SubsetRandomSampler(trainIndices)
         #testSampler = SubsetRandomSampler(testIndices)
 
-        trainingLoader = dataStorage.BatchDataLoader(id=self.name, indices=trainIndices, batch_size=config.miniBatchSize, num_threads_in_mt=config.numWorkers)
-        if config.numWorkers > 1:
-            trainingLoader = MultiThreadedAugmenter(trainingLoader, None, config.numWorkers, 2, None)
+        #we could scale the minibatch size by the number of samples, but this slows things down
+        #miniBatchSize = min(config.miniBatchSize, len(trainIndices) // config.numWorkers)
+        miniBatchSize = config.miniBatchSize
 
-        testingLoader = dataStorage.BatchDataLoader(id=self.name, indices=trainIndices, batch_size=config.miniBatchSize, num_threads_in_mt=config.numWorkers)
-        if config.numWorkers > 1:
-            testingLoader = MultiThreadedAugmenter(testingLoader, None, config.numWorkers)
+        #we could instead scale the number of workers by the number of minibatches
+        #numWorkers = min(config.numWorkers, len(trainIndices) // miniBatchSize)
+        numWorkers = config.numWorkers
+
+        trainingLoader = dataStorage.BatchDataLoader(id=self.name, indices=trainIndices, batch_size=miniBatchSize, num_threads_in_mt=config.numWorkers)
+        if numWorkers > 1:
+            trainingLoader = MultiThreadedAugmenter(trainingLoader, None, numWorkers, 2, None)
+
+        testingLoader = dataStorage.BatchDataLoader(id=self.name, indices=trainIndices, batch_size=miniBatchSize, num_threads_in_mt=numWorkers)
+        if numWorkers > 1:
+            testingLoader = MultiThreadedAugmenter(testingLoader, None, numWorkers)
 
         print(file=sys.stderr)
         for j in range(epochs):
@@ -670,9 +754,9 @@ class DeepCfrModel:
                 #get gradient of loss
                 #use amp because nvidia said it's better
                 #TODO fix amp
-                #with amp_handle.scale_loss(loss, self.optimizer) as scaled_loss:
-                    #scaled_loss.backward()
-                loss.backward()
+                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                    scaled_loss.backward()
+                #loss.backward()
 
 
                 #clip gradient norm, which was done in the paper
@@ -680,7 +764,8 @@ class DeepCfrModel:
 
                 #train the network
                 self.optimizer.step()
-                totalLoss += loss.item()
+                totalLoss += loss.item() / (torch.sum(iters).item() / iters.shape[0])
+                #totalLoss += loss.item()
 
 
             avgLoss = totalLoss / sampleCount
@@ -702,7 +787,7 @@ class DeepCfrModel:
                 ys = self.net(data, lengths=dataLengths, trace=False)
                 #print('ys', np.round(100 * ys.cpu().detach().numpy()) / 100, file=sys.stderr)
                 loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))# / labels.shape[0]
-                totalValLoss += loss.item()
+                totalValLoss += loss.item() / (torch.sum(iters).item() / iters.shape[0])
                 valCount += dataLengths.shape[0]
 
             self.net.train(True)
@@ -722,11 +807,13 @@ class DeepCfrModel:
                 lowestLoss = schedLoss
                 lowestLossIndex = j
 
-            if j - lowestLossIndex > 3 * config.schedulerPatience:#avoid saddle points
-                print('resetting learn rate to default', j, lowestLossIndex, lowestLoss, schedLoss, lastResetLoss, file=sys.stderr)
-                self.optimizer = optim.Adam(self.net.parameters(), lr=config.learnRate)
+            if j - lowestLossIndex > 5 * config.schedulerPatience:#avoid saddle points
+                #print('resetting learn rate to default', j, lowestLossIndex, lowestLoss, schedLoss, lastResetLoss, file=sys.stderr)
+                #self.optimizer = optim.Adam(self.net.parameters(), lr=config.learnRate)
                 #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
-                self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
+                #self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
+                print('stopping epoch early')
+                break
                 lowestLossIndex = j
 
                 #if we've reset before and made no progress, just stop
