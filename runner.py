@@ -24,7 +24,7 @@ import nethandler
 
 #This file has functions relating to running the AI
 
-async def trainAndPlay(numProcesses, pid, saveFile=None, clear=True, file=sys.stdout):
+async def trainAndPlay(numProcesses, pid, saveFile=None, clear=False, file=sys.stdout):
     if saveFile and saveFile[-1] != '/':
         saveFile += '/'
 
