@@ -10,9 +10,6 @@ import sys
 
 import config
 
-#TODO finish adding index-based actions after getting it working in warPoker
-#TODO implement saving trajectories so we can calculate reach probabilities
-
 #location of the modified ps executable
 PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
 PS_ARG = 'simulate-battle'
@@ -33,6 +30,7 @@ class _Context:
 def getContext():
     return _Context()
 
+"""
 #TODO make this better
 #I'd like to split up the more complex actions into simple subactions
 #so for doubles you would select your pokemon separately
@@ -50,8 +48,20 @@ actionMap = {
     'pass,pass': 8
 }
 #numActions = len(actionMap)
-numActions = 4#len(actionMap)
+"""
+numActions = 6
 
+#mons are joined with ']' in between
+#send setteam mon1]mon2]mon3
+#TODO I think the format changed with the latest version of showdown
+mons = [
+    '|Bisharp|lifeorb||suckerpunch,taunt,ironhead,falseswipe|Adamant|4,252,,,,252|||||',
+    '|Alakazam|aguavberry||disable,hiddenpowerfighting,psychic,knockoff|Modest|4,,,252,,252||,30,,,,|||',
+    '|Salazzle|focussash||fireblast,willowisp,sludgewave,disable|Modest|4,,,252,,252||,0,,,,|||',
+    '|Hawlucha|aguavberry|1|acrobatics,brickbreak,drainpunch,firepunch|Adamant|252,252,,,,4|||||',
+    '|Ferrothorn|rockyhelmet||leechseed,gyroball,powerwhip,knockoff|Sassy|252,4,,,252,||,,,,,0|||',
+    '|Dragonite|choiceband|H|dragonclaw,earthquake,extremespeed,aquatail|Jolly|4,252,,,,252|||||',
+]
 
 uselessPrefixes = [
     'player', 'teamsize', 'gametype', 'gen', 'tier', 'seed',
@@ -131,8 +141,9 @@ class Game:
 
         #request queues
         self.reqQueues = [asyncio.Queue(), asyncio.Queue()]
-        for i in range(2):
-            self.reqQueues[i].put_nowait({'teambuilding': True})
+        #we're now handling teambuilding separately
+        #for i in range(2):
+            #self.reqQueues[i].put_nowait({'teambuilding': True})
 
         #infosets are stored as a list of strings, which are basically tokens
         #individual events should have an end token at the end to separate them
@@ -143,6 +154,9 @@ class Game:
 
     async def startGame(self):
         await self.sendCmd('>start {"formatid":"gen7' + self.psFormat + '"' + (',"seed":' + str(self.seed) if self.seed else '') + '}')
+
+        self.inTeamPicker = True
+        self.pickedMons = [[],[]]
 
         asyncio.ensure_future(self.runInputLoop())
 
@@ -253,7 +267,13 @@ class Game:
             #optionally, we might get a request for a specific player's turn
             #even if prefPlayer is specified, we won't invalidate outstanding requests
             #so we still obey waitingOnAction
-            if prefPlayer != None:
+            if self.inTeamPicker and len(self.pickedMons[0]) < 3:
+                self.curReq = {'teambuilding': self.pickedMons[0]}
+                self.curPlayer = 0
+            elif self.inTeamPicker and len(self.pickedMons[1]) < 3:
+                self.curReq = {'teambuilding': self.pickedMons[1]}
+                self.curPlayer = 1
+            elif prefPlayer != None:
                 self.curReq = await self.reqQueues[prefPlayer].get()
                 self.curPlayer = prefPlayer
             elif self.reqQueues[0].qsize() > 0:
@@ -262,7 +282,8 @@ class Game:
             else:
                 self.curReq = await self.reqQueues[1].get()
                 self.curPlayer = 1
-            self.curActions = getMoves(self.format, self.curReq)
+            self.curActionCmds = getMoves(self.format, self.curReq)
+            self.curActions = [prettyPrintMove(a, self.curReq) for a in self.curActionCmds]
         return (self.curPlayer, self.curReq, self.curActions)
 
     #gets the infoset (i.e. visible history i.e. state) for the given player
@@ -271,21 +292,34 @@ class Game:
             infoContext = ['OPTIONS']
             for i, action in enumerate(self.curActions):
                 infoContext.append('@' + str(i))
-                infoContext.append(action)
+                infoContext += action.replace('|',',').split(',')
             return self.infosets[player] + infoContext
         else:
             return self.infosets[player]
 
     async def takeAction(self, player, actionIndex):
         action = self.curActions[actionIndex]
+        actionCmd = self.curActionCmds[actionIndex]
         self.waitingOnAction = False
-        #TODO separate the name of the action from the command
-        #e.g. show the user the names of moves, but send the normal command
+
         if self.saveTrajectories:
             self.prevTrajectories[player].append((copy.copy(self.getInfoset(player)), actionIndex, len(self.curActions)))
 
-        self.infosets[player].append(action)
-        await self.sendCmd(action, player)
+        self.infosets[player].append('CHOICE')
+        #split on , and | and ignore any tokens with no real content
+        self.infosets[player] += [a for a in action.replace('|',',').split(',') if len(a) > 0]
+
+        if self.inTeamPicker and len(self.pickedMons[player]) < 3:
+            #must be team preview, add to list of mons
+            self.pickedMons[player].append(actionCmd)
+            #if both players now have enough mons, send team selection
+            if len(self.pickedMons[0]) == 3 and len(self.pickedMons[1]) == 3:
+                self.inTeamPicker = False
+                await self.sendCmd('setteam ' + ']'.join(self.pickedMons[0]), 0)
+                await self.sendCmd('setteam ' + ']'.join(self.pickedMons[1]), 1)
+            return
+        
+        await self.sendCmd(actionCmd, player)
         
 
     async def sendCmd(self, cmd, player=None):
@@ -379,15 +413,19 @@ def getMoves(format, req):
 #this works for anything that doesn't require switching
 def getMovesImpl(format, req):
     if 'wait' in req:
-        return [' noop']
+        return [' noop'], ['noop']
     elif 'teambuilding' in req:
         #for now, we'll just give a pool of teams to pick from
+        """
         teams = [
             'setteam |Bisharp|lifeorb||suckerpunch,taunt,ironhead,falseswipe|Adamant|4,252,,,,252|||||]|Alakazam|aguavberry||disable,hiddenpowerfighting,psychic,knockoff|Modest|4,,,252,,252||,30,,,,|||]|Salazzle|focussash||fireblast,willowisp,sludgewave,disable|Modest|4,,,252,,252||,0,,,,|||',
             #'setteam |charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||',
             #'setteam |charmander|leftovers||flamethrower,icebeam,dragondance,hyperbeam|Modest|,,,252,4,252|M||||]|bulbasaur|lifeorb||gigadrain,powerwhip,sludgebomb,rockslide|Adamant|252,252,,,,4|M||||]|squirtle|lifeorb||fakeout,earthquake,hydropump,freezedry|Timid|,4,,252,,252|M||||',
         ]
-        return teams
+        """
+        curMons = req['teambuilding']#this organization sucks
+        availableMons = [m for m in mons if not m in curMons]
+        return availableMons
     elif 'win' in req:
         return []
     elif 'teamPreview' in req:
@@ -486,7 +524,7 @@ def getMovesImpl(format, req):
 
 
 def prettyPrintMove(jointAction, req):
-    if 'setteam' in jointAction:
+    if 'teambuilding' in req:
         return jointAction
     action = jointAction.split(',')
     actionText = []
