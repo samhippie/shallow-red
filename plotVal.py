@@ -5,6 +5,9 @@ import math
 
 import sys
 
+valFile = 'valloss.csv'
+trainFile = 'trainloss.csv'
+
 numRows = 5
 
 if len(sys.argv) == 3:
@@ -16,12 +19,12 @@ else:
 
 
 vals = []
-with open('valloss.csv') as file:
+with open(valFile) as file:
     for line in file.readlines():
         vals.append([float(x) for x in line.strip().split(',') if len(x) > 0])
 
 trains = []
-with open('trainloss.csv') as file:
+with open(trainFile) as file:
     for line in file.readlines():
         trains.append([float(x) for x in line.strip().split(',') if len(x) > 0])
 
