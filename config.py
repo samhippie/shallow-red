@@ -9,7 +9,8 @@ import games.pokemon
 
 #game-specific configuration
 class Pokemon:
-    format = '1v1'
+    #format = '1v1'
+    format = 'challengecup1v1'
     history = [[],[]]
 
 class WarPoker:
@@ -19,7 +20,7 @@ class WarPoker:
 
 #search
 #whether to print out each line in our training games (for debugging)
-verboseTraining = False
+verboseTraining = True
 
 #data storage
 dataDir = '/home/sam/data-ssd/'
@@ -32,7 +33,7 @@ bigCache = False
 #ignore moves with probabilities below this (likely just noise)
 probCutoff = 0.03
 #how many games to play after training
-numTestGames = 1000000
+numTestGames = 10
 
 #general game config
 #gameName = 'warPoker'
@@ -56,9 +57,9 @@ if gameName == 'warPoker':
     innerLoops = 200
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still possibly probed via rollout)
-    branchingLimit = None
+    branchingLimit = 1
     #whether to probe branches not taken
-    enableProbingRollout=True
+    enableProbingRollout=False
     #maximum depth in a traversal before rollout
     depthLimit = None
     #odds of the off player making a random move
@@ -67,7 +68,7 @@ if gameName == 'warPoker':
     #only used if branchingLimit is not none
     onExploreRate = 0.2
     #how many games to record per training iteration
-    progressGamesToRecord = 5
+    progressGamesToRecord = 10
     progressGamePath = 'progress/'
 
     #training
@@ -76,7 +77,7 @@ if gameName == 'warPoker':
     #number of epochs for training the strategy network
     stratEpochs = 5
     #maximum number of samples in an epoch
-    epochMaxNumSamples = 30000
+    epochMaxNumSamples = 10000
     #number of samples in a batch
     miniBatchSize = 4096
     #number of workers for the data loader
@@ -96,15 +97,7 @@ if gameName == 'warPoker':
     embedDropoutPercent = 0.2
 
     #cnn stuff
-    enableCnn = False
-    #output size of convolutions
-    convSizes = [8, 16]
-    #kernel sizes of convolutions (should be odd)
-    kernelSizes = [3, 5]
-    #list of convolution layers and depths
-    convDepths = [3, 3]
-    #list of (approximate) pooling output sizes (which determines the kernel size)
-    poolSizes = [8, 4]
+    enableCnn = True
 
     #size of hidden state of the lstm (split in half if we're using a bidirection lstm)
     lstmSize = 32
@@ -148,9 +141,9 @@ elif gameName == 'pokemon':
     #seed for all search games, None for default
     seed = None
     #which search iteration to start from, None for fresh start (delete data)
-    resumeIter = None
+    resumeIter = 2
     #number of game tree traversals per search iteration
-    innerLoops = 30
+    innerLoops = 20000
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still possibly probed via rollout)
     branchingLimit = 1
@@ -173,9 +166,9 @@ elif gameName == 'pokemon':
     #number of epochs for training the strategy network
     stratEpochs = 5
     #maximum number of samples in an epoch
-    epochMaxNumSamples = 30000
+    epochMaxNumSamples = 100000
     #number of samples in a batch
-    miniBatchSize = 2048
+    miniBatchSize = 1024
     #number of workers for the data loader
     numWorkers = 8
     #whether to create a fresh advantage network for each iteration
@@ -184,33 +177,25 @@ elif gameName == 'pokemon':
 
     #model
     #number of bits for numbers in infosets
-    numTokenBits = 10
+    numTokenBits = 5
     #maximum size for infoset vocabulary
     vocabSize = 4096
     #size of embedding vector
-    embedSize = 8
+    embedSize = 10
     #dropout rate after embedding during training
-    embedDropoutPercent = 0
+    embedDropoutPercent = 0.2
 
     #cnn stuff
     enableCnn = False
-    #output size of convolutions
-    convSizes = [8, 16, 32]
-    #kernel sizes of convolutions (should be odd)
-    kernelSizes = [3, 5, 7]
-    #list of convolution layers and depths
-    convDepths = [3, 3, 3]
-    #list of (approximate) pooling output sizes (which determines the kernel size)
-    poolSizes = [128, 64, 16]
 
     #size of hidden state of the lstm
-    lstmSize = 48
+    lstmSize = 64
     #number of lstm layers
-    numLstmLayers = 1
+    numLstmLayers = 2
     #dropout percentage for the lstm
-    lstmDropoutPercent = 0
+    lstmDropoutPercent = 0.2
     #size of each fully connected layer
-    width = 32
+    width = 64
 
     #enable an attention later after the lstm
     enableAttention = True

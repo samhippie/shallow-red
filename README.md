@@ -3,7 +3,8 @@ THIS README IS OUT OF DATE AND I'LL FIX IT WHEN I SORT STUFF OUT
 
 A Pokemon Showdown AI that uses Monte Carlo tree search with regret matching or Exp3 to make moves. It is assumed that both players have access to both team sheets. It supports most doubles and singles formats, including VGC. In VGC (and in all other formats), it assumes both players know which pokemon the opponent has in the back.
 
-Requires the modified PS server from [https://github.com/samhippie/Pokemon-Showdown](https://github.com/samhippie/Pokemon-Showdown). Make sure you run `npm install` in the PS server directory before running this program.
+~Requires the modified PS server from [https://github.com/samhippie/Pokemon-Showdown](https://github.com/samhippie/Pokemon-Showdown). Make sure you run `npm install` in the PS server directory before running this program.~
+Uses the official PS server
 
 The main MCTS algorithms used come from [http://mlanctot.info/files/papers/cig14-smmctsggp.pdf](http://mlanctot.info/files/papers/cig14-smmctsggp.pdf). The Regret Matching algorithms also uses some features from the DCFR algorithm in [https://arxiv.org/pdf/1809.04040.pdf](https://arxiv.org/pdf/1809.04040.pdf). The CFR algorithm is based on the algorithm described in
 [https://papers.nips.cc/paper/4569-efficient-monte-carlo-counterfactual-regret-minimization-in-games-with-many-player-actions.pdf](https://papers.nips.cc/paper/4569-efficient-monte-carlo-counterfactual-regret-minimization-in-games-with-many-player-actions.pdf), including the Average Sampling option. The use of on-policy rollouts for paths not taken in CFR is based on the use of probes in

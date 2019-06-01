@@ -247,7 +247,7 @@ class DeepCfrAgent:
                 weight *= reachProb
                 totalWeight += weight
                 probs, ev = model.predict(infoset, trace=False)
-                #print('raw probs', probs, file=file)
+                print('raw probs', probs, file=file)
                 probs = probs[0:len(actions)]
                 _, bestIndex = max([(p, i) for (i, p) in enumerate(probs)])
                 for j, p in enumerate(probs):
@@ -260,7 +260,7 @@ class DeepCfrAgent:
                     probs = np.zeros(len(probs))
                     probs[bestIndex] = 1
                     #probs = np.array([1 / len(probs) for p in probs])
-                #print(self.oldModelWeights[player][i], 'weight', weight, 'probs', probs, file=file)
+                print(self.oldModelWeights[player][i], 'weight', weight, 'probs', probs, file=file)
                 #probs, ev = self.getPredict(player, infoset)
                 expVal += ev * weight
                 if(stratProbs is not None):
@@ -340,25 +340,31 @@ class DeepCfrAgent:
         elif player == onPlayer:
             #get probs, which action we take depends on the configuration
             probs, regrets = self.regretMatch(onPlayer, infoset, actions, depth)
-            #if depth == 1 and self.pid == 0:
-                #print('onplayer ' + str(player) + ' hand ' + str(game.hands[player]) + ' probs', list(zip(actions, probs)), 'advs', regrets, file=sys.stderr)
+            #I don't think I'm using sampleProbs for anything
             if rollout:
                 #we pick one action according to the current strategy
                 #like this paper, except we also do it when we hit a depth limit
                 #https://poker.cs.ualberta.ca/publications/AAAI12-generalmccfr.pdf
                 actionIndices = [np.random.choice(len(actions), p=probs)]
+                #sampleProbs don't matter, but this is accurate
+                sampleProbs = probs
             elif config.branchingLimit:
                 #select a set of actions to pick
                 #chance to play randomly instead of picking the best actions
-                #this paper suggests playing according the currect strategoy with some exploration factor for outcome
-                #sampling (i.e. branchLimit = 1), so I assume that
+                #this paper suggests playing according the currect strategy with some exploration factor for outcome
+                #sampling (i.e. branchLimit = 1), so I assume that that's a good method for other branch limits
                 #http://mlanctot.info/files/papers/nips09mccfr.pdf
+                #the double neural CFR paper suggests using uniform random distribution, which is probably fine too
                 exploreProbs = probs * (1 - config.onExploreRate) + config.onExploreRate / len(probs)
                 actionIndices = np.random.choice(len(actions), min(len(actions), config.branchingLimit), 
                         replace=False, p=exploreProbs)
+                #this is only true for branchingLimit=1, but I don't feel like coding a general solution right now
+                sampleProbs = exploreProbs
             else:
                 #we're picking every action
                 actionIndices = list(range(len(actions)))
+                #100% chance of sampling each action
+                sampleProbs = np.ones(probs.shape)
 
             #get expected reward for each action
             rewards = []
@@ -399,17 +405,42 @@ class DeepCfrAgent:
                 else:
                     newHistory = [history[0], history[1] + [(None, i)]]
 
-                r = await self.cfrRecur(context, game, startSeed, newHistory, iter, depth=depth+1, rollout=curRollout, q=q*probs[i])
+                r = await self.cfrRecur(context, game, startSeed, newHistory, iter, depth=depth+1, rollout=curRollout, q=q*sampleProbs[i])
                 rewards.append(r)
 
             if not rollout:
                 #save sample of advantages
+                #the normal implementations of outcome sampling just divide things by q, but that makes the numbers blow up
+                #I think this is because we're not really calculating regret, but advantages
+                #probs / sampleProbs won't blow up, but I don't know if it's correct
+                #the nice thing about external sampling is that you don't run into these kinds of issues, the math makes everything work out
+
+                #if we probe, then we end up with a decent set of expected values and probabilities, which should be enough
+                #but probing is expensive. We could instead cheat and get the calculated expected value and return that a fraction of the time
+                #but then we'd have to terminate the game early
+
+                """
+                if config.branchingLimit == 1 and not config.enableProbingRollout:
+                    ind = actionIndices[0]
+                    stateExpValue = rewards[ind]
+                    #if q is 0, then us being here is a 0 probability event
+                    #but I don't want to die because of some weird rounding
+                    advantages = [stateExpValue / max(q, 0.001)  * ((1 if i == ind else 0) - p) for i, p in enumerate(probs)]
+                else:
+                """
+                #actually, if the rewards for non-sampled actions are 0, then outcome sampling here only differs
+                #from standard outcome sampling by not dividing by q, which messes up the scaling
+                #I think that we're really just approximating something proportional to regret, so scaling everything
+                #by q isn't needed
+                #I did some math and doing OS like this scales the regret we would accumulate
+                #by 1/(overall reach prob), while ES scales by 1/(off-player and chance reach prob)
                 stateExpValue = 0
                 for p,r in zip(probs, rewards):
                     stateExpValue += p * r
                 advantages = [r - stateExpValue for r in rewards]
                 #if self.pid == 0:
                     #print('infoset', infoset)
+                    #print('q', q, 'exp val', stateExpValue)
                     #print('actions, prob, reward, advantage', *list(zip(actions, probs, rewards, advantages)))
                 #CFR+, anyone?
                 #also using the sqrt(t) equation from that double neural cfr paper

@@ -3,6 +3,7 @@
 from apex import amp
 from hashembed.embedding import HashEmbedding
 import io
+import itertools
 import math
 import numpy as np
 import sys
@@ -21,20 +22,23 @@ import time
 import dataStorage
 import config
 
-AMP_OPT_LEVEL = "O1"
+AMP_OPT_LEVEL = "O2"
 
 #how many bits are used to represent numbers in tokens
 NUM_TOKEN_BITS = config.numTokenBits
 
+#not actually binary, but some weird logarithmic unary-ish thing
 def numToBinary(n):
-    ceiling = 1 << NUM_TOKEN_BITS
-    if n >= ceiling:
-        n = ceiling - 1
     b = []
-    while n > 0:
-        b.append(n & 1)
-        n >>= 1
-    b += [0] * (NUM_TOKEN_BITS - len(b))
+    for i in range(NUM_TOKEN_BITS):
+        if n <= 0:
+            b.append(0)
+        elif n >= 1 << i:
+            b.append(1)
+        else:
+            #b.append(n / (1 << i))#this is neat, but I'd have to convert a bunch of longs to floats
+            b.append(0)
+            n = 0
     return torch.tensor(b)
 
 #used to map each token in an infoset into an int representation
@@ -55,42 +59,140 @@ def tokenToTensor(x):
 def infosetToTensor(infoset):
     return torch.stack([tokenToTensor(token) for token in infoset])
 
-def batchNorm(x):
-    if x.shape[0] == 1:
-        return x
-    #this is normalizing to zero mean, unit variance
-    mean = torch.mean(x, dim=0)
-    x = x - mean.unsqueeze(0).repeat(x.shape[0], 1)
-    std = torch.std(x, dim=0)
-    #if a std is 0, then the mean is also 0, so there's nothing we can do except pass 0 along via 0 / 0.01
-    #and this operation is much simpler than trying to only change the 0 values
-    std = std + torch.Tensor([0.00001]).repeat(std.shape[0]).cuda()
-    x = x / std.unsqueeze(0).repeat(x.shape[0], 1)
-    return x
-
-class SimpleNet(nn.Module):
+#this is a breaking change from the normal LstmNet
+#it assumes each input sequence is broken up into subsequences
+#it runs an initial lstm on the subsequences in parallel (with attention),
+#and then runs another lstm on the final outputs of the subsequences (with some more attention)
+class SlicedLstmNet(nn.Module):
     def __init__(self, softmax=False):
         super(Net, self).__init__()
         self.outputSize = config.game.numActions
         self.softmax = softmax
-        self.inputSize = 15
-        dropout = 0
         self.embeddings = HashEmbedding(config.vocabSize, config.embedSize, append_weight=False, mask_zero=True)
-        self.dropE = nn.Dropout(dropout)
 
-        #simple feed forward for final part
-        self.fc1 = nn.Linear(self.inputSize * (config.embedSize + config.numTokenBits), config.width)
-        self.drop1 = nn.Dropout(dropout)
+        #the two LSTMs don't have to have the same input size, but I don't feel like adding the second parameter
+        self.lstm0 = nn.LSTM(lstmInputSize, config.lstmSize, num_layers = config.numLstmLayers, dropout = config.lstmDropoutPercent, batch_first=True)
+        self.attn0 = nn.Linear(2 * config.lstmSize, config.lstmSize)
+
+        self.lstm1 = nn.LSTM(config.lstmSize, config.lstmSize, num_layers = config.numLstmLayers, dropout = config.lstmDropoutPercent, batch_first=True)
+        self.attn1 = nn.Linear(2 * config.lstmSize, config.lstmSize)
+
+        #fully connected layers
+        #strategy
+        self.fc1 = nn.Linear(config.lstmSize, config.width)
         self.fc2 = nn.Linear(config.width, config.width)
-        self.drop2 = nn.Dropout(dropout)
         self.fc3 = nn.Linear(config.width, config.width)
-        self.drop3 = nn.Dropout(dropout)
-
         self.fc6 = nn.Linear(config.width, self.outputSize)
 
-        self.fcVal1 = nn.Linear(config.width, config.width)
+        #expected value
+        self.fcVal1 = nn.Linear(config.lstmSize, config.width)
         self.fcVal2 = nn.Linear(config.width, config.width)
         self.fcValOut = nn.Linear(config.width, 1)
+
+
+    #batch is a list of lists of tokens
+    def collate(batch, convertToTensor=True):
+        #make sure we're in the shape (batch, sequence, subsequence, token)
+        batch = [[infosetToTensor(i) for i in infosets] for infosets in batch] if convertToTensor else batch
+        batchToSort = [(i, len(b), b) for i, b in enumerate(batch)]
+        batchToSort.sort(key=lambda x: x[1], reverse=True)
+        maxSeqLength = batchToSort[0][1]
+        #make every sequence the same length
+        for i, l, seq in batchToSort:
+            for j in range(maxSeqLength - len(seq)):
+                seq.append([])
+        seqLengths = [l for _, l, _ in batchToSort]
+        seqIndices = [i for i, _, _ in batchToSort]
+        subs = [seq for _, _, seq in batchToSort]
+        #now we only have individual subsequences
+        subs = list(itertools.chain.from_iterable(subs))
+        subsToSort = [(i, len(s), s) for i, s in enumerate(subs)]
+        subsToSort.sort(key=lambda x: x[1], reverse=True)
+        padded = torch.zeros(len(subsToSort), subsToSort[0][1], len(subsToSort[0][2][0]), dtype=torch.long)
+        for i, (ind, l, s) in enumerate(subsToSort):
+            if l > 0:
+                padded[i, :l] = s[:l]
+        subIndices = [i for i, _, _ in subsToSort]
+        subLengths = [l for _, l, _ in subsToSort]
+
+        subLengths = torch.tensor(subLengths, dtype=torch.long)
+        subIndices = torch.tensor(subIndices, dtype=torch.long)
+        seqLengths = torch.tensor(seqLengths, dtype=torch.long)
+        seqIndices = torch.tensor(seqIndices, dtype=torch.long)
+
+        #we need the unpadded lengths to process the subsequences
+        #and we need the original indices to unsort the subsequences into proper sequences
+        #and then we need the length of each sequence to process
+        #and then we need the original indices to unsort the sequences
+        return padded, subLengths, subIndices, maxSeqLength, seqLengths, seqIndices
+
+    #unsorts the data with the given indices
+    def unsort(xs, indices):
+        out = torch.zeros(xs.shape, dtype=xs.dtype).to(xs.device)
+        indices = indices.unsqueeze(1).expand(-1, out.shape[1])
+        out.scatter_(0, indices, xs)
+        return out
+
+    #runs the padded input through the lstm and applies attention
+    def lstmForward(lstm, attn, x, lengths):
+        #lstm
+        x = torch.nn.utils.rnn.pack_padded_sequence(x, lengths, batch_first=True)
+        x, _ = lstm(x)
+        x, _ = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
+        lasts = x[torch.arange(0, x.shape[0], device=device), lengths-1]
+        #attn
+        lasts = lasts[:, None, :]
+        lasts = lasts.repeat(1, x.shape[1], 1)
+        xWithContext = torch.cat([x, lasts], 2)
+        outAttn = attn(xWithContext)
+        mask = torch.arange(outattn1.shape[1], device=x.device)[None, :] >= lengths[:, None]
+        outattn[mask] = float('-inf')
+        outattn = F.softmax(outattn, dim=1)
+        x = torch.sum(x * outattn, dim=1)
+        return x
+
+    #basically the same thing that collate spits out
+    def forward(x, lengths0, indices0, paddedLength, lengths1, indices1):
+        preEmbed = x
+        #only embed based on the first value in the infoset token
+        x = self.embeddings(x[:,:,0])
+        #keep the remaining values unembedded
+        x = torch.cat((x, preEmbed[:,:, 1:].to(dtype=x.dtype)), 2)
+        
+        #process subsequences
+        x = lstmForward(self.lstm0, self.attn0, x, lengths0)
+        #rearrange into original sequences
+        x = unsort(x, indices0)
+        x = split(x, paddedLength)
+        #process original sequences
+        x = lstmForward(self.lstm1, self.attn1, x, lengths1)
+        x = unsort(x, indices1)
+
+        xVal = x
+        #strategy output
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x) + x)
+        x = F.relu(self.fc3(x) + x)
+        x = self.fc6(x)
+
+        if self.softmax:
+            x = F.softmax(x, dim=1)
+
+        #expected value output
+        xVal = F.relu(self.fcVal1(xVal))
+        xVal = F.relu(self.fcVal2(xVal) + xVal)
+        xVal = self.fcValOut(xVal)
+
+        x = torch.cat([x, xVal], dim=1)
+        return x
+
+
+
+
+    #xs is a series of padded concatenated sequences
+    #this splits xs into a set of those sequences
+    def split(xs, paddedLength):
+        return xs.view(-1, paddedLength, *x.shape[1:])
 
 
     def forward(self, infoset, lengths=None, trace=False):
@@ -192,51 +294,25 @@ class LstmNet(nn.Module):
 
         self.dropout = nn.Dropout(config.embedDropoutPercent)
 
-        """
-        convSize = config.embedSize + config.numTokenBits
-        self.conv1 = nn.Conv1d(convSize, convSize, kernel_size=3, stride=1, padding=1)
-        self.conv1Dropout = nn.Dropout(0.5)
-        self.bn1 = nn.BatchNorm1d(convSize)
-        self.conv2 = nn.Conv1d(convSize, convSize, kernel_size=3, stride=1, padding=1)
-        self.conv2Dropout = nn.Dropout(0.5)
-        self.bn2 = nn.BatchNorm1d(convSize)
-        self.conv3 = nn.Conv1d(convSize, convSize, kernel_size=3, stride=1, padding=1)
-        self.conv3Dropout = nn.Dropout(0.5)
-        """
-
         if config.enableCnn:
-
-            convLayers = []
-            convBatchNorms = []
-            for i, depth in enumerate(config.convDepths):
-                convs = []
-                convsBn = []
-                for j in range(depth):
-                    if i == 0 and j == 0:
-                        #input from embedding
-                        inputSize = config.embedSize + config.numTokenBits
-                    elif j == 0:
-                        #input from previous layer
-                        inputSize = config.convSizes[i-1]
-                    else:
-                        #input from current layer
-                        inputSize = config.convSizes[i]
-                    #TODO make the stride configurable per layer so we can reduce the sequence length
-                    k = config.kernelSizes[i]
-                    p = k + 1 // 2
-                    conv = nn.Conv1d(inputSize, config.convSizes[i], kernel_size=k, stride=1, padding=p)
-                    convs.append(conv)
-                    convsBn.append(nn.BatchNorm1d(config.convSizes[i]))
-                convLayers.append(nn.ModuleList(convs))
-                convBatchNorms.append(nn.ModuleList(convsBn))
-            self.convLayers = nn.ModuleList(convLayers)
-            self.convBatchNorms = nn.ModuleList(convBatchNorms)
-
-        #LSTM to process infoset via the embeddings
-        if config.enableCnn:
-            self.lstm = nn.LSTM(config.convSizes[-1], config.lstmSize, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, bidirectional=False, batch_first=True)
+            #using these numbers reduces the total input size going to the lstm to around 1/3
+            #while reducing the length of the sequence to around 1/8
+            #(this was writtine with 2,3,4 conv sizes)
+            convSize = config.embedSize + config.numTokenBits
+            lstmInputSize = 1 * convSize
+            self.conv1 = nn.Conv1d(convSize, 2 * convSize, kernel_size=11, stride=2, padding=6)
+            self.conv1Dropout = nn.Dropout(0.2)
+            #self.bn1 = nn.BatchNorm1d(convSize)
+            self.conv2 = nn.Conv1d(2 * convSize, 3 * convSize, kernel_size=11, stride=2, padding=6)
+            self.conv2Dropout = nn.Dropout(0.2)
+            #self.bn2 = nn.BatchNorm1d(convSize)
+            self.conv3 = nn.Conv1d(3 * convSize, convSize, kernel_size=1, stride=1, padding=0)
+            self.conv3Dropout = nn.Dropout(0.2)
         else:
-            self.lstm = nn.GRU(config.embedSize + config.numTokenBits, config.lstmSize, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, bidirectional=False, batch_first=True)
+            lstmInputSize = config.embedSize + config.numTokenBits
+
+        #'LSTM' to process infoset via the embeddings
+        self.lstm = nn.GRU(lstmInputSize, config.lstmSize, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, bidirectional=False, batch_first=True)
 
         #attention
         if config.enableAttention:
@@ -279,111 +355,84 @@ class LstmNet(nn.Module):
 
         embedded = self.dropout(embedded)
         #replace the hash with the embedded vector
-        embedded = torch.cat((embedded, infoset[:,:, 1:].to(dtype=embedded.dtype)), 2)
+        x = torch.cat((embedded, infoset[:,:, 1:].to(dtype=embedded.dtype)), 2)
         #del infoset
 
         #go through a couple conv layers
         #need to mask out the part proportional to the initial lengths in the conv output
         #so we can keep the garbage out here and in the lstm layer
         #if lengths is None, then there is no padding and no point in masking
-        """
-        x = torch.transpose(embedded, 1, 2)
-        #preLength = x.shape[2]
-        x = self.bn1(x)
-        x = F.relu(self.conv1(x)) + x
-        x = self.conv1Dropout(x)
-        x = F.relu(self.conv2(x)) + x
-        x = self.conv1Dropout(x)
-        x = F.relu(self.conv3(x)) + x
-        x = self.conv1Dropout(x)
-        x = torch.transpose(x, 1, 2)
-
-        if lengths is not None:
-            lengths = lengths.float()
-            lengths *= x.shape[2] / preLength
-            lengths += 1
-            lengths = lengths.long()
-            x = torch.transpose(x, 1, 2)
-            mask = torch.arange(x.shape[1], device=device)[None, :] >= lengths[:, None]
-            x[mask] = 0
+        if config.enableCnn:
             x = torch.transpose(x, 1, 2)
             preLength = x.shape[2]
+            x = F.relu(self.conv1(x))
+            #x = self.bn1(x)
+            x = self.conv1Dropout(x)
 
-        x = F.relu(self.conv2(x))
-        x = self.bn2(x)
-        x = self.conv2Dropout(x)
-
-        if lengths is not None:
-            lengths = lengths.float()
-            lengths *= x.shape[2] / preLength
-            lengths += 1
-            lengths = lengths.long()
-            x = torch.transpose(x, 1, 2)
-            mask = torch.arange(x.shape[1], device=device)[None, :] >= lengths[:, None]
-            x[mask] = 0
-            x = torch.transpose(x, 1, 2)
-
-        x = F.relu(self.conv3(x))
-        x = self.conv2Dropout(x)
-
-        if lengths is not None:
-            lengths = lengths.float()
-            lengths *= x.shape[2] / preLength
-            lengths += 1
-            lengths = lengths.long()
-            x = torch.transpose(x, 1, 2)
-            mask = torch.arange(x.shape[1], device=device)[None, :] >= lengths[:, None]
-            x[mask] = 0
-        else:
-            x = torch.transpose(x, 1, 2)
-        """
-
-
-
-        if config.enableCnn:
-            x = torch.transpose(embedded, 1, 2)
-            #print('x shape', x.shape)
-            for i, convs in enumerate(self.convLayers):
-                for j, conv in enumerate(convs):
-                    x = conv(x)
-                    #x = self.convBatchNorms[i][j](x)
-                    x = F.relu(x)
-                    #print('x after conv shape', x.shape)
-                kernelSize = min(max(1, x.shape[2] // config.poolSizes[i]), x.shape[2])
-                x = F.max_pool1d(x, kernelSize)
-                #print('x after pooling shape', x.shape)
-
-            lstmInput = torch.transpose(x, 1, 2)
-            #print('x about to lstm shape', x.shape)
-            #why is this here? leave this commented out unless it starts giving use trouble
-            #x = x.squeeze(2)
-
-        else:
-            #lengths are passed in if we have to worry about padding
-            #https://towardsdatascience.com/taming-lstms-variable-sized-mini-batches-and-why-pytorch-is-good-for-your-health-61d35642972e
             if lengths is not None:
-                lstmInput = torch.nn.utils.rnn.pack_padded_sequence(embedded, lengths, batch_first=True)
+                lengths = lengths.float()
+                lengths *= x.shape[2] / preLength
+                #give output a little extra room
+                lengths += 1
+                #need lengths to still be valid lengths
+                lengths = torch.clamp(lengths, min=1, max=x.shape[2])
+                lengths = lengths.long()
+                x = torch.transpose(x, 1, 2)
+                mask = torch.arange(x.shape[1], device=device)[None, :] >= lengths[:, None]
+                x[mask] = 0
+                x = torch.transpose(x, 1, 2)
+                preLength = x.shape[2]
+
+            x = F.relu(self.conv2(x))
+            #x = self.bn2(x)
+            x = self.conv2Dropout(x)
+
+            if lengths is not None:
+                lengths = lengths.float()
+                lengths *= x.shape[2] / preLength
+                lengths += 1
+                lengths = torch.clamp(lengths, min=1, max=x.shape[2])
+                lengths = lengths.long()
+                x = torch.transpose(x, 1, 2)
+                mask = torch.arange(x.shape[1], device=device)[None, :] >= lengths[:, None]
+                x[mask] = 0
+                del mask
+                x = torch.transpose(x, 1, 2)
+
+            x = F.relu(self.conv3(x))
+            x = self.conv2Dropout(x)
+
+            if lengths is not None:
+                lengths = lengths.float()
+                lengths *= x.shape[2] / preLength
+                lengths += 1
+                lengths = torch.clamp(lengths, min=1, max=x.shape[2])
+                lengths = lengths.long()
+                x = torch.transpose(x, 1, 2)
+                mask = torch.arange(x.shape[1], device=device)[None, :] >= lengths[:, None]
+                x[mask] = 0
+                del mask
             else:
-                lstmInput = embedded
+                x = torch.transpose(x, 1, 2)
+
+        #lengths are passed in if we have to worry about padding
+        #https://towardsdatascience.com/taming-lstms-variable-sized-mini-batches-and-why-pytorch-is-good-for-your-health-61d35642972e
+        if lengths is not None:
+            x = torch.nn.utils.rnn.pack_padded_sequence(x, lengths, batch_first=True)
 
         #remember that we set batch_first to be true
-        x, _ = self.lstm(lstmInput)
+        x, _ = self.lstm(x)
 
         #get the final output of the lstm
 
-        if config.enableCnn:
-            #with convolutions, the lengths of the sequences are going to be messed up anyway
-            #so it's probably fine to just take all sequences in a batch to be the same length
-            lasts = x[:,-1]
+        if lengths is not None:
+            #have to account for padding/packing
+            #don't use the lengths this returns, as it put it on the cpu instead of cuda
+            #and we need the lengths for cuda stuff
+            x, _ = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
+            lasts = x[torch.arange(0, x.shape[0], device=device), lengths-1]
         else:
-            if lengths is not None:
-                #have to account for padding/packing
-                #don't use the lengths this returns, as it put it on the cpu instead of cuda
-                #and we need the lengths for cuda stuff
-                x, _ = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
-                lasts = x[torch.arange(0, x.shape[0], device=device), lengths-1]
-            else:
-                lasts = x[:,-1]
+            lasts = x[:,-1]
 
         if trace:
             print('lasts', lasts, file=sys.stderr)
@@ -400,7 +449,7 @@ class LstmNet(nn.Module):
             #outattn2 = self.attn2(xWithContext)
             #outattn3 = self.attn3(xWithContext)
             #mask out the padded values (cnns don't have padded values)
-            if not config.enableCnn and lengths is not None:
+            if lengths is not None:
                 #http://juditacs.github.io/2018/12/27/masked-attention.html
                 #we're setting padding values to -inf to get softmaxed to 0, so we want to mask out the real data
                 #hence >= instead of >
@@ -505,7 +554,8 @@ class DeepCfrModel:
 
         if(useNet):
             self.net = Net(softmax=softmax).cuda()
-            self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+            #self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+            self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr)
             self.net, self.optimizer = amp.initialize(self.net, self.optimizer, opt_level=AMP_OPT_LEVEL)
             #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
@@ -633,12 +683,16 @@ class DeepCfrModel:
             newNet = Net(softmax=self.softmax)
             #embedding should be preserved across iterations
             #but we want a fresh start for the strategy
-            newNet.load_state_dict(self.net.state_dict())
+            #actually, the deep cfr paper said don't do this
+            #newNet.load_state_dict(self.net.state_dict())
+            #I'm still going to copy over the embedding
+            newNet.embeddings.load_state_dict(self.net.embeddings.state_dict())
             self.net = newNet
 
 
         self.net = self.net.to(device)
-        self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+        #self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
+        self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr)
         self.net, self.optimizer = amp.initialize(self.net, self.optimizer, opt_level=AMP_OPT_LEVEL)
         #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
@@ -675,7 +729,7 @@ class DeepCfrModel:
         if numWorkers > 1:
             trainingLoader = MultiThreadedAugmenter(trainingLoader, None, numWorkers, 2, None)
 
-        testingLoader = dataStorage.BatchDataLoader(id=self.name, indices=trainIndices, batch_size=miniBatchSize, num_threads_in_mt=numWorkers)
+        testingLoader = dataStorage.BatchDataLoader(id=self.name, indices=testIndices, batch_size=miniBatchSize, num_threads_in_mt=numWorkers)
         if numWorkers > 1:
             testingLoader = MultiThreadedAugmenter(testingLoader, None, numWorkers)
 
@@ -738,7 +792,7 @@ class DeepCfrModel:
                 #print('ys exp values std', ys[:, -1].std(), file=sys.stderr)
 
                 #loss function from the paper
-                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))# / labels.shape[0]
+                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2)) / (torch.sum(iters).item() / iters.shape[0])
                 #loss = torch.sum((labels - ys) ** 2) / labels.shape[0]
                 #loss = lossFunc(ys, labels)
                 #print('loss', loss)
@@ -807,7 +861,11 @@ class DeepCfrModel:
                 lowestLoss = schedLoss
                 lowestLossIndex = j
 
-            if j - lowestLossIndex > 5 * config.schedulerPatience:#avoid saddle points
+            if schedLoss < 0.35:
+                print('eh,', schedLoss, 'is good enough', file=sys.stderr)
+                break
+
+            if j - lowestLossIndex > 3 * config.schedulerPatience:#avoid saddle points
                 #print('resetting learn rate to default', j, lowestLossIndex, lowestLoss, schedLoss, lastResetLoss, file=sys.stderr)
                 #self.optimizer = optim.Adam(self.net.parameters(), lr=config.learnRate)
                 #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
@@ -880,3 +938,14 @@ class DeepCfrModel:
 
         #clean old data out
         #dataStorage.clearSamplesByName(self.name)
+
+if __name__ == '__main__':
+    #example of how to handle the sliced lstm model's padding
+    batch = [ [[10, 11], [12,13,14,15]], [[1,2,3],[4,5],[6,7,8]] ]
+    x, l0, i0, pl, l1, i1 = SlicedLstmNet.collate(batch, convertToTensor=True)
+    x = torch.sum(x, dim=1)#if we went through an lstm, we'd use l0
+    x = SlicedLstmNet.unsort(x, i0)
+    x = SlicedLstmNet.split(x, pl)
+    x = torch.sum(x, dim=1)#again, we'd use l1 here
+    x = SlicedLstmNet.unsort(x, i1)
+    print(x)

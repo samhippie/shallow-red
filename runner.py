@@ -97,11 +97,12 @@ async def trainAndPlay(numProcesses, pid, saveFile=None, clear=False, file=sys.s
 
         os.environ['MASTER_ADDR'] = '127.0.0.1'
         os.environ['MASTER_PORT'] = '29500'
-        #3 hour timeout
+        #50 hour timeout
         #shouldn't be an issue
-        dist.init_process_group('gloo', timeout=datetime.timedelta(0, 10800000), rank=pid, world_size = numProcesses)
+        dist.init_process_group('gloo', timeout=datetime.timedelta(0, 180000000), rank=pid, world_size = numProcesses)
+        #dist.init_process_group('gloo', init_method='file:///home/sam/sharedfile', timeout=datetime.timedelta(0, 10800000), rank=pid, world_size = numProcesses)
 
-        agentGroup = dist.new_group(ranks=list(range(1, numProcesses)))
+        agentGroup = dist.new_group(ranks=list(range(1, numProcesses)), timeout=datetime.timedelta(0, 180000000))
 
         if pid == 0:
             print('setting up net process', file=sys.stderr)

@@ -3,12 +3,16 @@
 import asyncio
 import copy
 import json
+import math
 import numpy as np
 import random
 import subprocess
 import sys
 
 import config
+
+#TODO i'm making internal commands start with !
+#so things like noop and picking parts of a team should start using it
 
 #location of the modified ps executable
 PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
@@ -30,47 +34,46 @@ class _Context:
 def getContext():
     return _Context()
 
-"""
-#TODO make this better
-#I'd like to split up the more complex actions into simple subactions
-#so for doubles you would select your pokemon separately
-#and your previously selected subactions would be a part of your infoset
-actionMap = {
-    'team 1': 0,
-    'team 2': 1,
-    'team 3': 2,
-    'move 1 1,pass': 3,
-    'move 2 1,pass': 4,
-    'move 3 1,pass': 5,
-    'move 4 1,pass': 6,
-    #'setteam |charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||': 7,
-    'setteam |Bisharp|lifeorb||suckerpunch,taunt,ironhead,falseswipe|Adamant|4,252,,,,252|||||]|Alakazam|aguavberry||disable,hiddenpowerfighting,psychic,knockoff|Modest|4,,,252,,252||,30,,,,|||]|Salazzle|focussash||fireblast,willowisp,sludgewave,disable|Modest|4,,,252,,252||,0,,,,|||': 7,
-    'pass,pass': 8
-}
-#numActions = len(actionMap)
-"""
-numActions = 6
+#really determined by format, but I don't want too many outputs
+#for doubles and switching formats, we'll probably have to break each mon up, and then break attacking and switching up
+numActions = 10
 
 #mons are joined with ']' in between
 #send setteam mon1]mon2]mon3
-#TODO I think the format changed with the latest version of showdown
-mons = [
-    '|Bisharp|lifeorb||suckerpunch,taunt,ironhead,falseswipe|Adamant|4,252,,,,252|||||',
-    '|Alakazam|aguavberry||disable,hiddenpowerfighting,psychic,knockoff|Modest|4,,,252,,252||,30,,,,|||',
-    '|Salazzle|focussash||fireblast,willowisp,sludgewave,disable|Modest|4,,,252,,252||,0,,,,|||',
-    '|Hawlucha|aguavberry|1|acrobatics,brickbreak,drainpunch,firepunch|Adamant|252,252,,,,4|||||',
-    '|Ferrothorn|rockyhelmet||leechseed,gyroball,powerwhip,knockoff|Sassy|252,4,,,252,||,,,,,0|||',
-    '|Dragonite|choiceband|H|dragonclaw,earthquake,extremespeed,aquatail|Jolly|4,252,,,,252|||||',
+#TODO I think the format changed with the latest version of showdown, fix when we update showdown
+#TODO also update showdown
+legalMons = [
+    #'Bisharp||darkiniumz||suckerpunch,taunt,ironhead,falseswipe|Adamant|4,252,,,,252|||||',
+    #'Alakazam||alakazite||disable,hiddenpowerfighting,psychic,knockoff|Modest|4,,,252,,252||,30,,,,|||',
+    #'Salazzle||focussash||fireblast,icebeam,sludgewave,disable|Modest|4,,,252,,252||,0,,,,|||',
+    'Salazzle||focussash||imprison,icebeam,,|Modest|4,,,252,,252||,0,,,,|||',
+    'Bisharp||focussash||imprison,flamethrower,,|Modest|4,,,252,,252||,0,,,,|||',
+    'Alakazam||focussash||imprison,scald,,|Modest|4,,,252,,252||,0,,,,|||',
+    #'Hawlucha||aguavberry|1|acrobatics,brickbreak,drainpunch,firepunch|Adamant|252,252,,,,4|||||',
+    #'Ferrothorn||rockyhelmet||leechseed,gyroball,powerwhip,knockoff|Sassy|252,4,,,252,||,,,,,0|||',
+    #'Dragonite||choiceband|H|dragonclaw,earthquake,extremespeed,aquatail|Jolly|4,252,,,,252|||||',
+]
+
+#incomplete
+teamPickingFormats = [
+    '1v1',
 ]
 
 uselessPrefixes = [
     'player', 'teamsize', 'gametype', 'gen', 'tier', 'seed',
     'rule', 'c', 'clearpoke\n', 'teampreview', 'start', '-hint',
 ]
+
+with open('games/dataPokemon/pokemonTokenMapper.json', 'r') as f:
+    tokenMapper = json.load(f)
+
 #turns a line into a series of tokens that can be added to an infoset
 #takes the player to normalize between p1 and p2
-def tokenize(line, player):
-    if not line.startswith('|'):
+def tokenize(line, player, gameLine=True):
+    if gameLine and not line.startswith('|'):
+        return []
+
+    if not line.strip():
         return []
 
     #split by '|', ':', ',', and '/'
@@ -78,27 +81,34 @@ def tokenize(line, player):
     tokens = line.split('|')
 
     #filter out useless lines
-    if tokens[1] in uselessPrefixes:
+    if len(tokens) > 1 and tokens[1] in uselessPrefixes:
         return []
 
     #make it so all players see things from p1's perspective
+    #and also make tokens lowercase and strip whitespace
     if player == 1:
-        tokens = [token.replace('p2', 'p3').replace('p1', 'p2').replace('p3', 'p1') for token in tokens]
+        tokens = [token.lower().strip().replace('p2', 'p3').replace('p1', 'p2').replace('p3', 'p1') for token in tokens]
+    else:
+        tokens = [token.lower().strip() for token in tokens]
+
+    #no empty strings
+    tokens = [token for token in tokens if token]
+
+    #may turn each token into a set of tokens
+    tokens = [(tokenMapper[token] if token in tokenMapper else [token]) for token in tokens]
+    #concatenate so we get a simple flat list
+    tokens = [inner for outer in tokens for inner in outer]
 
     #TODO remove any nicknames
 
     tokens.append('|')
 
-    return [token.strip() for token in tokens[1:]]
+    return tokens
 
 #returns a seed that can be converted directly to a string and sent to PS
+#actually 3 seeds, battle, p1, and p2
 def getSeed():
-    return [
-        random.random() * 0x10000,
-        random.random() * 0x10000,
-        random.random() * 0x10000,
-        random.random() * 0x10000,
-    ]
+    return [[math.floor(random.random() * 0x10000) for i in range(4)] for j in range(3)]
         
 #handles input and output of a single match
 #players should read requests from p1Queue/p2Queue
@@ -153,10 +163,15 @@ class Game:
         self.winner = loop.create_future()
 
     async def startGame(self):
-        await self.sendCmd('>start {"formatid":"gen7' + self.psFormat + '"' + (',"seed":' + str(self.seed) if self.seed else '') + '}')
+        await self.sendCmd('>start {"formatid":"gen7' + self.psFormat + '"' + (',"seed":' + str(self.seed[0]) if self.seed else '') + '}')
 
+        #state for team builder
+        #this will probably grow enough to be its own class
         self.inTeamPicker = True
         self.pickedMons = [[],[]]
+
+        #mons that need to be mega evolved on the next command
+        self.toMega = [[],[]]
 
         asyncio.ensure_future(self.runInputLoop())
 
@@ -176,7 +191,7 @@ class Game:
             seed, actionIndex = h[player][0]
             del h[player][0]
             if seed != None:
-                await self.sendCmd('>resetPRNG ' + seed)
+                await self.sendCmd('>resetPRNG ' + seed[0])
             await self.takeAction(player, actionIndex)
 
 
@@ -195,6 +210,9 @@ class Game:
             if self.verbose:
                 print(line, end='', file=self.file)
 
+            #old-style split
+            #PS changed how they split
+            #https://github.com/Zarel/Pokemon-Showdown/commit/7e4929a39f72a553604bdff58e37b5c95e695e04
             if line == '|split\n':
                 #private info
                 #p1 infoset
@@ -205,6 +223,16 @@ class Game:
                 await getLine()
                 #omniscient view, print if verbose
                 outLine = await getLine()
+                if self.verbose:
+                    print(outLine, end='', file=self.file)
+
+            elif line.startswith('|split|'):
+                #direct secret player line to player
+                player = 0 if line[7:9] == 'p1' else 1
+                self.infosets[player] += tokenize(await getLine(), player)
+                #direct public line to other player and print out
+                outLine = await getLine()
+                self.infosets[(player + 1) % 2] += tokenize(outLine, (player + 1) % 2)
                 if self.verbose:
                     print(outLine, end='', file=self.file)
 
@@ -219,10 +247,14 @@ class Game:
                 message = json.loads(message)
                 await curQueue.put(message)
 
+            elif line.startswith('|error|[Unavailable choice]'):
+                #don't actually have to do anything
+                pass
+
             elif line.startswith('|error'):
                 print('ERROR', line, file=sys.stderr)
+                print('looks like a real error', file=sys.stderr)
                 quit()
-                #this should never happen
 
             elif line.startswith('|win'):
                 winner = line[5:-1]
@@ -279,10 +311,25 @@ class Game:
             elif self.reqQueues[0].qsize() > 0:
                 self.curReq = await self.reqQueues[0].get()
                 self.curPlayer = 0
-            else:
+            elif self.reqQueues[1].qsize() > 0:
                 self.curReq = await self.reqQueues[1].get()
                 self.curPlayer = 1
-            self.curActionCmds = getMoves(self.format, self.curReq)
+            else:
+                #we need to loop like this in some rare instances, like when a move gets imprisoned
+                while True:
+                    try:
+                        self.curReq = await asyncio.wait_for(self.reqQueues[0].get(), timeout=.3)
+                        self.curPlayer = 0
+                        break
+                    except asyncio.TimeoutError:
+                        try:
+                            self.curReq = await asyncio.wait_for(self.reqQueues[1].get(), timeout=.3)
+                            self.curPlayer = 1
+                            break
+                        except asyncio.TimeoutError:
+                            pass
+
+            self.curActionCmds = self.getMoves(self.curPlayer, self.curReq)
             self.curActions = [prettyPrintMove(a, self.curReq) for a in self.curActionCmds]
         return (self.curPlayer, self.curReq, self.curActions)
 
@@ -291,8 +338,7 @@ class Game:
         if self.curPlayer == player:
             infoContext = ['OPTIONS']
             for i, action in enumerate(self.curActions):
-                infoContext.append('@' + str(i))
-                infoContext += action.replace('|',',').split(',')
+                infoContext += ['@', str(i)] + tokenize(action, player, gameLine=False)
             return self.infosets[player] + infoContext
         else:
             return self.infosets[player]
@@ -305,11 +351,13 @@ class Game:
         if self.saveTrajectories:
             self.prevTrajectories[player].append((copy.copy(self.getInfoset(player)), actionIndex, len(self.curActions)))
 
-        self.infosets[player].append('CHOICE')
-        #split on , and | and ignore any tokens with no real content
-        self.infosets[player] += [a for a in action.replace('|',',').split(',') if len(a) > 0]
+        self.infosets[player] += ['CHOICE'] +  tokenize(action, player, gameLine=False)
 
-        if self.inTeamPicker and len(self.pickedMons[player]) < 3:
+        if self.inTeamPicker and self.format not in teamPickingFormats:
+            self.inTeamPicker = False
+            await self.sendCmd('setteam ', 0)
+            await self.sendCmd('setteam ', 1)
+        elif self.inTeamPicker and len(self.pickedMons[player]) < 3:
             #must be team preview, add to list of mons
             self.pickedMons[player].append(actionCmd)
             #if both players now have enough mons, send team selection
@@ -317,9 +365,30 @@ class Game:
                 self.inTeamPicker = False
                 await self.sendCmd('setteam ' + ']'.join(self.pickedMons[0]), 0)
                 await self.sendCmd('setteam ' + ']'.join(self.pickedMons[1]), 1)
-            return
-        
-        await self.sendCmd(actionCmd, player)
+        elif '!makemega' in actionCmd:
+            #just save to internal mega state
+            mon = int(actionCmd.split(' ')[1])
+            self.toMega[player].append(mon)
+            #we've already marked a pokemon as going to mega, so we'll remove the option from the request
+            req = self.curReq
+            if len(self.toMega[player]) > 0 and 'active' in req:
+                for i in range(len(req['active'])):
+                    if 'canMegaEvo' in req['active'][i] and req['active'][i]['canMegaEvo'] and i in self.toMega[player]:
+                        del req['active'][i]['canMegaEvo']
+
+            #and we'll just reactivate the pending request
+            self.curActionCmds = self.getMoves(self.curPlayer, self.curReq)
+            self.curActions = [prettyPrintMove(a, self.curReq) for a in self.curActionCmds]
+            self.waitingOnAction = True
+        else:
+            if len(self.toMega[player]) > 0:
+                cmdlets = actionCmd.split(',')
+                for i, mon in enumerate(self.toMega[player]):
+                    cmdlets[i] += ' mega'
+                actionCmd = ','.join(cmdlets)
+                self.toMega[player] = []
+            
+            await self.sendCmd(actionCmd, player)
         
 
     async def sendCmd(self, cmd, player=None):
@@ -329,7 +398,7 @@ class Game:
         if cmd.startswith('setteam '):
             #teambuilding is handled outside of the actual game, so it's not a normal command
             team = cmd[8:]
-            msg = '>player p' + str(player+1) + ' {"name":"' + self.names[player] + '", "avatar": "43", "team":"' + team + '"}'
+            msg = '>player p' + str(player+1) + ' {"name":"' + self.names[player] + '", "avatar": "43"' + ((',"team":"' + team + '"') if team != '' else '') + ((',"seed":' + str(self.seed[player+1])) if self.seed else '') + '}'
             if(self.verbose):
                 print('sending', msg, file=self.file)
             self.ps.stdin.write(bytes(msg + '\n', 'UTF-8'))
@@ -342,10 +411,16 @@ class Game:
             print('sending', header + cmd, file=self.file)
         self.ps.stdin.write(bytes(header + cmd + '\n', 'UTF-8'))
 
-    async def resetSeed(self):
-        seed = getSeed()
-        await self.sendCmd('>resetPRNG ' + seed)
-        return seed
+    #I'm upgrading the local version of PS, and I don't feel like porting this over
+    #we haven't been using it, so it should be fine
+    #async def resetSeed(self):
+        #seed = getSeed()
+        #await self.sendCmd('>resetPRNG ' + seed)
+        #return seed
+
+    def getMoves(self, player, req):
+        
+        return getMovesImpl(self.format, req)
 
 
 
@@ -399,33 +474,18 @@ actionCache = {}
 
 doublesFormats = ['doubles', '2v2doubles', '2v2', 'vgc']
 
-#using the cache seems to be a little bit faster in tests
-#1000 games 1v1 went from 43s to 40s
-def getMoves(format, req):
-    #not caching because req now includes things like seeds
-    return getMovesImpl(format, req)
-    #key = (format, str(req))
-    #if not key in actionCache:
-        #actionCache[key] = getMovesImpl(format, req)
-    #return actionCache[key]
-
 #this takes the req as a dict
 #this works for anything that doesn't require switching
 def getMovesImpl(format, req):
     if 'wait' in req:
         return [' noop'], ['noop']
     elif 'teambuilding' in req:
-        #for now, we'll just give a pool of teams to pick from
-        """
-        teams = [
-            'setteam |Bisharp|lifeorb||suckerpunch,taunt,ironhead,falseswipe|Adamant|4,252,,,,252|||||]|Alakazam|aguavberry||disable,hiddenpowerfighting,psychic,knockoff|Modest|4,,,252,,252||,30,,,,|||]|Salazzle|focussash||fireblast,willowisp,sludgewave,disable|Modest|4,,,252,,252||,0,,,,|||',
-            #'setteam |charmander|lifeorb||flareblitz,brickbreak,dragondance,outrage|Adamant|,252,,,4,252|M||||]|bulbasaur|chestoberry||gigadrain,toxic,sludgebomb,rest|Quiet|252,4,,252,,|M|,0,,,,|||]|squirtle|leftovers||fakeout,aquajet,hydropump,freezedry|Quiet|252,4,,252,,|M||||',
-            #'setteam |charmander|leftovers||flamethrower,icebeam,dragondance,hyperbeam|Modest|,,,252,4,252|M||||]|bulbasaur|lifeorb||gigadrain,powerwhip,sludgebomb,rockslide|Adamant|252,252,,,,4|M||||]|squirtle|lifeorb||fakeout,earthquake,hydropump,freezedry|Timid|,4,,252,,252|M||||',
-        ]
-        """
-        curMons = req['teambuilding']#this organization sucks
-        availableMons = [m for m in mons if not m in curMons]
-        return availableMons
+        if format in teamPickingFormats:
+            curMons = req['teambuilding']#this organization sucks
+            availableMons = [m for m in legalMons if not m in curMons]
+            return availableMons
+        else:
+            return ['']
     elif 'win' in req:
         return []
     elif 'teamPreview' in req:
@@ -483,9 +543,15 @@ def getMovesImpl(format, req):
             if mon['condition'] == '0 fnt':
                 actions.append('pass')
             else:
+                if 'canMegaEvo' in req['active'][i] and req['active'][i]['canMegaEvo']:
+                    actions.append('!makemega ' + str(i))
                 moves = req['active'][i]['moves']
-                for j in range(len(moves)):
-                    move = moves[j]
+                numNormalMoves = len(moves)
+                if 'canZMove' in req['active'][i]:
+                    moves += req['active'][i]['canZMove']
+                for j, move in enumerate(moves):
+                    if move is None:
+                        continue
                     if ('disabled' in move and move['disabled']) or ('pp' in move and move['pp'] == 0):
                         continue
                     if format not in doublesFormats or 'target' not in move:
@@ -498,9 +564,15 @@ def getMovesImpl(format, req):
                         targets = ['-1' if i == 1 else '-2', '1', '2']
                     if len(targets) > 0:
                         for target in targets:
-                            actions.append('move ' + str(j+1) + ' ' + target)
+                            if j >= numNormalMoves:
+                                actions.append('move ' + str(j+1 - numNormalMoves) + ' ' + target + ' zmove')
+                            else:
+                                actions.append('move ' + str(j+1) + ' ' + target)
                     else:
-                        actions.append('move ' + str(j+1))
+                        if j >= numNormalMoves:
+                            actions.append('move ' + str(j+1 - numNormalMoves) + ' zmove')
+                        else:
+                            actions.append('move ' + str(j+1))
 
             #pick the possible switching targets
             #TODO check how this works with shadow tag etc
@@ -533,8 +605,14 @@ def prettyPrintMove(jointAction, req):
         a = a.strip()
         if 'pass' in a:
             actionText.append('pass')
+        elif '!makemega' in a:
+            mon = a.split(' ')[1]
+            actionText.append('mega evolve,' + mon)
         elif 'move' in a:
             parts = a.split(' ')
+            zMove = parts[-1] == 'zmove'
+            if zMove:
+                del parts[-1]
             moveNum = int(parts[1])
             if len(parts) < 3:
                 targetNum = 0
@@ -542,9 +620,9 @@ def prettyPrintMove(jointAction, req):
                 targetNum = int(parts[2])
             move = req['active'][k]['moves'][moveNum-1]['move']
             if targetNum != 0:
-                actionText.append(move + ' into slot ' + str(targetNum))
+                actionText.append(('Z|' if zMove else '') + move + ', into slot, ' + str(targetNum))
             else:
-                actionText.append(move)
+                actionText.append(('Z|' if zMove else '') + move)
         elif 'team' in a:
             actionText.append(a)
         elif 'switch' in a:
@@ -560,30 +638,11 @@ def prettyPrintMove(jointAction, req):
     return actionString
 
 
+if __name__ == '__main__':
+    #test code for adding megas and z moves
+    req = json.loads("""{"active":[{"moves":[{"move":"Sucker Punch","id":"suckerpunch","pp":0,"maxpp":8,"target":"normal","disabled":true},{"move":"Taunt","id":"taunt","pp":32,"maxpp":32,"target":"normal","disabled":true},{"move":"Iron Head","id":"ironhead","pp":23,"maxpp":24,"target":"normal","disabled":false},{"move":"False Swipe","id":"falseswipe","pp":62,"maxpp":64,"target":"normal","disabled":false}],"canZMove":[null,{"move":"Z-Taunt","target":"normal"},null,null]}],"side":{"name":"bot1","id":"p1","pokemon":[{"ident":"p1: Bisharp","details":"Bisharp, M","condition":"135/272","active":true,"stats":{"atk":383,"def":236,"spa":140,"spd":176,"spe":239},"moves":["suckerpunch","taunt","ironhead","falseswipe"],"baseAbility":"defiant","item":"darkiniumz","pokeball":"pokeball","ability":"defiant"}]},"stateHash":-957399959,"state":{"weather":{"pokemon":0,"teampreview":0},"players":[{"zMoveUsed":false,"active":{"p1: Bisharp":{"active":true,"newlySwitched":false,"ability":"defiant","addedType":"","moves":[0,1,0,0],"boosts":[0,0,0,0,0,0,0],"volatiles":{"taunt":1}}},"sideConditions":{},"mons":{"p1: Bisharp":{"details":"Bisharp, M","status":"","hp":5,"item":"darkiniumz"}}},{"zMoveUsed":false,"active":{"p2: Bisharp":{"active":true,"newlySwitched":false,"ability":"defiant","addedType":"","moves":[0,0,0,0],"boosts":[0,0,0,0,0,0,0],"volatiles":{}}},"sideConditions":{},"mons":{"p2: Bisharp":{"details":"Bisharp, M","status":"","hp":5,"item":"darkiniumz"}}}],"startingSeed":[51968.887253846486,40822.144387754604,7650.083569921713,44314.95115095951],"actions":[["team 1","move 1","move 1","move 4","move 4","move 1","move 1","move 1","move 1","move 1","move 1","move 3"],["team 1","move 2","move 2","move 2","move 2","move 2","move 2","move 2","move 2","move 2","move 1","move 1"]]}}""")
 
-"""
-def enumAction(action):
-    #we have to to some modifications to put actions in a consistent format
 
-    #pass,pass is more orthogonal
-    if action.strip() == 'noop':
-        action = 'pass,pass'
-    #convert singles actions to a canonical form
-    elif ',' not in action and 'team' not in action:
-        action += ',pass'
-    #if there's a move with no target, set the target to 1
-    fixedAction = []
-    for part in action.split(','):
-        part = part.strip()
-        if 'move' in part:
-            components = part.split(' ')
-            #add a default target
-            if len(components) == 2:
-                components.append('1')
-            part = ' '.join(components)
-        fixedAction.append(part)
-
-    action = ','.join(fixedAction)
-
-    return actionMap[action]
-"""
+    moves = getMovesImpl('1v1', req)
+    print(moves)
+    print([prettyPrintMove(m, req) for m in moves])
