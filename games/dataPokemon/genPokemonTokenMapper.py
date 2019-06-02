@@ -4,14 +4,15 @@ import json
 
 #load showdown data
 with open('pokedex.json', 'r') as f:
-    data = json.load(f)
+    dex = json.load(f)
+with open('moves.json', 'r') as f:
+    moves = json.load(f)
 
 tokenMapper = {}
 
-"""
 #replace each instance of a pokemon with a basic summary
-for id in data:
-    mon = data[id]
+for id in dex:
+    mon = dex[id]
     species = mon['species'].lower()
     types = [t.lower() for t in mon['types']]
     #single type -> two of same type
@@ -26,9 +27,18 @@ for id in data:
         str(base['spd']),
         str(base['spe']),
     ]
-    tokenMapper[species] = [species] + types + stats
+    tokenMapper[species] = [species] + types# + stats
 
-"""
+#replace each instance of a move with basic summary
+for id in moves:
+    move = moves[id]
+    name = move['name'].lower()
+    type = move['type'].lower()
+    cat = move['category'].lower()
+    power = str(move['basePower'])
+    tokenMapper[name] = [name, type, cat, power]
+
+
 #split up level so we can see the number
 for i in range(100):
     tokenMapper['l' + str(i)] = ['l', str(i)]
