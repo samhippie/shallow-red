@@ -20,7 +20,7 @@ class WarPoker:
 
 #search
 #whether to print out each line in our training games (for debugging)
-verboseTraining = True
+verboseTraining = False
 
 #data storage
 dataDir = '/home/sam/data-ssd/'
@@ -141,14 +141,14 @@ elif gameName == 'pokemon':
     #seed for all search games, None for default
     seed = None
     #which search iteration to start from, None for fresh start (delete data)
-    resumeIter = 2
+    resumeIter = None
     #number of game tree traversals per search iteration
-    innerLoops = 20000
+    innerLoops = 50
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still possibly probed via rollout)
     branchingLimit = 1
     #whether to probe branches not taken
-    enableProbingRollout=True
+    enableProbingRollout=False
     #maximum depth in a traversal before rollout
     depthLimit = 20
     #odds of the off player making a random move
@@ -168,7 +168,7 @@ elif gameName == 'pokemon':
     #maximum number of samples in an epoch
     epochMaxNumSamples = 100000
     #number of samples in a batch
-    miniBatchSize = 1024
+    miniBatchSize = 512
     #number of workers for the data loader
     numWorkers = 8
     #whether to create a fresh advantage network for each iteration
@@ -189,13 +189,13 @@ elif gameName == 'pokemon':
     enableCnn = False
 
     #size of hidden state of the lstm
-    lstmSize = 64
+    lstmSize = 16
     #number of lstm layers
-    numLstmLayers = 2
+    numLstmLayers = 4
     #dropout percentage for the lstm
     lstmDropoutPercent = 0.2
     #size of each fully connected layer
-    width = 64
+    width = 16
 
     #enable an attention later after the lstm
     enableAttention = True
