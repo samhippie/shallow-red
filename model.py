@@ -24,6 +24,9 @@ import config
 
 AMP_OPT_LEVEL = "O2"
 
+OPTIMIZER = optim.Adam
+#OPTIMIZER = optim.SGD
+
 #how many bits are used to represent numbers in tokens
 NUM_TOKEN_BITS = config.numTokenBits
 
@@ -299,14 +302,14 @@ class LstmNet(nn.Module):
             #while reducing the length of the sequence to around 1/8
             #(this was writtine with 2,3,4 conv sizes)
             convSize = config.embedSize + config.numTokenBits
-            lstmInputSize = 1 * convSize
+            lstmInputSize = 4 * convSize
             self.conv1 = nn.Conv1d(convSize, 2 * convSize, kernel_size=11, stride=2, padding=6)
             self.conv1Dropout = nn.Dropout(0.2)
             #self.bn1 = nn.BatchNorm1d(convSize)
             self.conv2 = nn.Conv1d(2 * convSize, 3 * convSize, kernel_size=11, stride=2, padding=6)
             self.conv2Dropout = nn.Dropout(0.2)
             #self.bn2 = nn.BatchNorm1d(convSize)
-            self.conv3 = nn.Conv1d(3 * convSize, convSize, kernel_size=1, stride=1, padding=0)
+            self.conv3 = nn.Conv1d(3 * convSize, 4 * convSize, kernel_size=11, stride=2, padding=6)
             self.conv3Dropout = nn.Dropout(0.2)
         else:
             lstmInputSize = config.embedSize + config.numTokenBits
@@ -554,10 +557,8 @@ class DeepCfrModel:
 
         if(useNet):
             self.net = Net(softmax=softmax).cuda()
-            #self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
-            self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr)
+            self.optimizer = OPTIMIZER(self.net.parameters(), lr=self.lr)
             self.net, self.optimizer = amp.initialize(self.net, self.optimizer, opt_level=AMP_OPT_LEVEL)
-            #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
             self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
 
         #cache of (infoset tensor, label tensor, iteration) tuples
@@ -692,7 +693,7 @@ class DeepCfrModel:
 
         self.net = self.net.to(device)
         #self.optimizer = optim.Adam(self.net.parameters(), lr=self.lr)
-        self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr)
+        self.optimizer = OPTIMIZER(self.net.parameters(), lr=self.lr)
         self.net, self.optimizer = amp.initialize(self.net, self.optimizer, opt_level=AMP_OPT_LEVEL)
         #self.optimizer = optim.SGD(self.net.parameters(), lr=self.lr, momentum=0.9)
         self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, 'min', patience=config.schedulerPatience, verbose=False)
