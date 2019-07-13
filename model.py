@@ -588,7 +588,7 @@ class DeepCfrModel:
                 data = data.long().to(device)
                 dataLengths = dataLengths.long().to(device)
                 ys = self.net(data, lengths=dataLengths, trace=False).squeeze()
-                if valCount == 0:
+                if config.verboseValidation and valCount == 0:
                     #print('data', data[0:min(10, len(data))])
                     print('labels', labels[0:min(10, len(labels))])
                     print('output', ys[0:min(10, len(labels))])

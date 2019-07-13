@@ -20,7 +20,9 @@ class WarPoker:
 
 #search
 #whether to print out each line in our training games (for debugging)
-verboseTraining = True
+verboseTraining = False
+#whether to print details for each validation pass
+verboseValidation = False
 
 #data storage
 dataDir = '/home/sam/data-ssd/'
