@@ -539,7 +539,7 @@ class DeepCfrModel:
             sampleCount = 0
             chunkSize = dataset.size  / (miniBatchSize * 10)
             for data, dataLengths, labels, iters in trainingLoader:
-                sampleCount += dataLengths.shape[0]
+                sampleCount += 1#dataLengths.shape[0]
                 i += 1
 
                 labels = labels.float().to(device)
@@ -598,7 +598,7 @@ class DeepCfrModel:
 
                 loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2)) / (torch.sum(iters).item())
                 totalValLoss += loss.item()
-                valCount += dataLengths.shape[0]
+                valCount += 1#dataLengths.shape[0]
 
             self.net.train(True)
 
