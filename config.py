@@ -20,7 +20,7 @@ class WarPoker:
 
 #search
 #whether to print out each line in our training games (for debugging)
-verboseTraining = False
+verboseTraining = True
 
 #data storage
 dataDir = '/home/sam/data-ssd/'
@@ -46,13 +46,14 @@ if gameName == 'warPoker':
     #search
     #number of search processes (limited by cpu utilization and gpu memory)
     #set to 0 to run search in main thread (mainly for debugging)
+    #not sure this is being used anymore
     numProcesses = 10
     #number of search iterations
     limit = 100
     #seed for all search games, None for default
     seed = None
     #which search iteration to start from, None for fresh start (delete data)
-    resumeIter = 25
+    resumeIter = None
     #number of game tree traversals per search iteration
     innerLoops = 500
     #limit on number of branches to take per action in a traversal
@@ -92,7 +93,7 @@ if gameName == 'warPoker':
     #maximum size for infoset vocabulary
     vocabSize = 256
     #size of embedding vector
-    embedSize = 64
+    embedSize = 16
     #dropout rate after embedding during training
     embedDropoutPercent = 0.5
 
@@ -100,7 +101,7 @@ if gameName == 'warPoker':
     enableCnn = False
 
     #size of hidden state of the lstm (split in half if we're using a bidirection lstm)
-    lstmSize = 64
+    lstmSize = 12
     #number of lstm layers
     numLstmLayers = 2
     #dropout percentage for the lstm
@@ -109,10 +110,10 @@ if gameName == 'warPoker':
     width = 16
 
     #enable an attention layer after the lstm
-    enableAttention = False
+    enableAttention = True
 
     #learn rate for training
-    learnRate = 0.0001 
+    learnRate = 0.001 
     #which optimizer to use (adam or sgd)
     optimizer = 'adam'
     #whether to use a scheduler for the learning rate
@@ -126,6 +127,7 @@ if gameName == 'warPoker':
     #how many samples to cache before writing to disk (give or take)
     sampleCacheSize = 1000
     #max size on number of samples (only supported for on-disk sample storage)
+    #not sure that this is being used anymore
     maxNumSamples = {
         'adv0': None,
         'adv1': None,
