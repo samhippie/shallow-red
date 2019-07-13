@@ -213,7 +213,8 @@ class DeepCfrAgent:
     #where a trajectory is a list of infoset-action pairs
     def getReachProb(self, model, traj):
         reachProb = 1
-        for infoset, actionIndex, numActions in traj:
+        for infoset, actionIndex, actions in traj:
+            numActions = len(actions)
             probs, _ = model.predict(infoset)
             probs = probs[0:numActions]
             #actionNum = config.game.enumAction(action)
@@ -450,6 +451,7 @@ class DeepCfrAgent:
                 #print('advantages', advantages)
 
                 am = self.advModels[onPlayer]
+                print(infoset, advantages, iter // 2 + 1, stateExpValue)
                 am.addSample(infoset, advantages, iter // 2 + 1, stateExpValue)
 
                 #if depth == 0 and self.pid == 0:
