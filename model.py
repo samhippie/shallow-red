@@ -521,6 +521,7 @@ class DeepCfrModel:
             testingLoader = MultiThreadedAugmenter(testingLoader, None, numWorkers)
 
         print(file=sys.stderr)
+        shuffleStride = 10#TODO move to config
         for j in range(epochs):
             if epochs > 1:
                 print('\repoch', j, end=' ', file=sys.stderr)
@@ -531,7 +532,8 @@ class DeepCfrModel:
             totalLoss = 0
             lossFunc = nn.MSELoss()
 
-            baseTrainingLoader.shuffle()
+            if (j + 1) % shuffleStride == 0:
+                baseTrainingLoader.shuffle()
 
             i = 1
             sampleCount = 0
