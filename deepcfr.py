@@ -451,7 +451,6 @@ class DeepCfrAgent:
                 #print('advantages', advantages)
 
                 am = self.advModels[onPlayer]
-                print(infoset, advantages, iter // 2 + 1, stateExpValue)
                 am.addSample(infoset, advantages, iter // 2 + 1, stateExpValue)
 
                 #if depth == 0 and self.pid == 0:
