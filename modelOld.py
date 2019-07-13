@@ -24,10 +24,8 @@ import config
 
 AMP_OPT_LEVEL = "O2"
 
-if config.optimizer == 'adam':
-    OPTIMIZER = optim.Adam
-elif config.optimizer == 'sgd':
-    OPTIMIZER = optim.SGD
+OPTIMIZER = optim.Adam
+#OPTIMIZER = optim.SGD
 
 #how many bits are used to represent numbers in tokens
 NUM_TOKEN_BITS = config.numTokenBits
@@ -64,6 +62,254 @@ def tokenToTensor(x):
 def infosetToTensor(infoset):
     return torch.stack([tokenToTensor(token) for token in infoset])
 
+#this net takes action and state separately, only returns one output (in addition to state lstm output for convenience)
+#also has way to pass in state lstm output to quickly evaluate other options
+class SplitLstmNet(nn.Module):
+    def __init__(self, softmax=False):
+        super(Net, self).__init__()
+        self.outputSize = config.game.numActions
+        self.softmax = softmax
+        self.embeddings = HashEmbedding(config.vocabSize, config.embedSize, append_weight=False, mask_zero=True)
+
+        #the two LSTMs don't have to have the same input size, but I don't feel like adding the second parameter
+        self.lstm0 = nn.LSTM(lstmInputSize, config.lstmSize, num_layers = config.numLstmLayers, dropout = config.lstmDropoutPercent, batch_first=True)
+        self.attn0 = nn.Linear(2 * config.lstmSize, config.lstmSize)
+
+        self.lstm1 = nn.LSTM(config.lstmSize, config.lstmSize, num_layers = config.numLstmLayers, dropout = config.lstmDropoutPercent, batch_first=True)
+        self.attn1 = nn.Linear(2 * config.lstmSize, config.lstmSize)
+
+        #fully connected layers
+        #strategy
+        self.fc1 = nn.Linear(config.lstmSize, config.width)
+        self.fc2 = nn.Linear(config.width, config.width)
+        self.fc3 = nn.Linear(config.width, config.width)
+        self.fc6 = nn.Linear(config.width, self.outputSize)
+
+        #expected value
+        self.fcVal1 = nn.Linear(config.lstmSize, config.width)
+        self.fcVal2 = nn.Linear(config.width, config.width)
+        self.fcValOut = nn.Linear(config.width, 1)
+
+    #batch is a list of tuples
+    #each tuple contains an infoset and some amount of other information that needs to stay in the same order
+    #e.g. labels, iters
+    #outputs each part of tuple collated into tensors as well as the array for unsorting the entries to original order
+    def _collate(batch):
+        #based on the collate_fn here
+        #https://github.com/yunjey/pytorch-tutorial/blob/master/tutorials/03-advanced/image_captioning/data_loader.py
+
+        #sort by data length
+        batch.sort(key=lambda x: len(x[0]), reverse=True)
+        data, labels, iters = zip(*batch)
+
+        #labels and iters have a fixed size, so we can just stack
+        labels = torch.stack(labels)
+        iters = torch.stack(iters)
+
+        #sequences are padded with 0 vectors to make the lengths the same
+        lengths = [len(d) for d in data]
+        padded = torch.zeros(len(data), max(lengths), len(data[0][0]), dtype=torch.long)
+        for i, d in enumerate(data):
+            end = lengths[i]
+            padded[i, :end] = d[:end]
+
+        #need to know the lengths so we can pack later
+        lengths = torch.tensor(lengths)
+
+        return padded, lengths, labels, iters
+
+
+    #batch is a list of 2-tuples of tokens
+    #need to split into two padded tensors for lstm evaluation, kind of like the normal lstm net
+    def collate(batch, convertToTensor=True):
+
+    #batch is a list of lists of tokens
+    def collateSplit(batch, convertToTensor=True):
+        #make sure we're in the shape (batch, sequence, subsequence, token)
+        batch = [[infosetToTensor(i) for i in infosets] for infosets in batch] if convertToTensor else batch
+        batchToSort = [(i, len(b), b) for i, b in enumerate(batch)]
+        batchToSort.sort(key=lambda x: x[1], reverse=True)
+        maxSeqLength = batchToSort[0][1]
+        #make every sequence the same length
+        for i, l, seq in batchToSort:
+            for j in range(maxSeqLength - len(seq)):
+                seq.append([])
+        seqLengths = [l for _, l, _ in batchToSort]
+        seqIndices = [i for i, _, _ in batchToSort]
+        subs = [seq for _, _, seq in batchToSort]
+        #now we only have individual subsequences
+        subs = list(itertools.chain.from_iterable(subs))
+        subsToSort = [(i, len(s), s) for i, s in enumerate(subs)]
+        subsToSort.sort(key=lambda x: x[1], reverse=True)
+        padded = torch.zeros(len(subsToSort), subsToSort[0][1], len(subsToSort[0][2][0]), dtype=torch.long)
+        for i, (ind, l, s) in enumerate(subsToSort):
+            if l > 0:
+                padded[i, :l] = s[:l]
+        subIndices = [i for i, _, _ in subsToSort]
+        subLengths = [l for _, l, _ in subsToSort]
+
+        subLengths = torch.tensor(subLengths, dtype=torch.long)
+        subIndices = torch.tensor(subIndices, dtype=torch.long)
+        seqLengths = torch.tensor(seqLengths, dtype=torch.long)
+        seqIndices = torch.tensor(seqIndices, dtype=torch.long)
+
+        #we need the unpadded lengths to process the subsequences
+        #and we need the original indices to unsort the subsequences into proper sequences
+        #and then we need the length of each sequence to process
+        #and then we need the original indices to unsort the sequences
+        return padded, subLengths, subIndices, maxSeqLength, seqLengths, seqIndices
+
+    #unsorts the data with the given indices
+    def unsort(xs, indices):
+        out = torch.zeros(xs.shape, dtype=xs.dtype).to(xs.device)
+        indices = indices.unsqueeze(1).expand(-1, out.shape[1])
+        out.scatter_(0, indices, xs)
+        return out
+
+    #runs the padded input through the lstm and applies attention
+    def lstmForward(lstm, attn, x, lengths):
+        #lstm
+        x = torch.nn.utils.rnn.pack_padded_sequence(x, lengths, batch_first=True)
+        x, _ = lstm(x)
+        x, _ = torch.nn.utils.rnn.pad_packed_sequence(x, batch_first=True)
+        lasts = x[torch.arange(0, x.shape[0], device=device), lengths-1]
+        #attn
+        lasts = lasts[:, None, :]
+        lasts = lasts.repeat(1, x.shape[1], 1)
+        xWithContext = torch.cat([x, lasts], 2)
+        outAttn = attn(xWithContext)
+        mask = torch.arange(outattn1.shape[1], device=x.device)[None, :] >= lengths[:, None]
+        outattn[mask] = float('-inf')
+        outattn = F.softmax(outattn, dim=1)
+        x = torch.sum(x * outattn, dim=1)
+        return x
+
+    #basically the same thing that collate spits out
+    def forward(x, lengths0, indices0, paddedLength, lengths1, indices1):
+        preEmbed = x
+        #only embed based on the first value in the infoset token
+        x = self.embeddings(x[:,:,0])
+        #keep the remaining values unembedded
+        x = torch.cat((x, preEmbed[:,:, 1:].to(dtype=x.dtype)), 2)
+        
+        #process subsequences
+        x = lstmForward(self.lstm0, self.attn0, x, lengths0)
+        #rearrange into original sequences
+        x = unsort(x, indices0)
+        x = split(x, paddedLength)
+        #process original sequences
+        x = lstmForward(self.lstm1, self.attn1, x, lengths1)
+        x = unsort(x, indices1)
+
+        xVal = x
+        #strategy output
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x) + x)
+        x = F.relu(self.fc3(x) + x)
+        x = self.fc6(x)
+
+        if self.softmax:
+            x = F.softmax(x, dim=1)
+
+        #expected value output
+        xVal = F.relu(self.fcVal1(xVal))
+        xVal = F.relu(self.fcVal2(xVal) + xVal)
+        xVal = self.fcValOut(xVal)
+
+        x = torch.cat([x, xVal], dim=1)
+        return x
+
+
+
+
+    #xs is a series of padded concatenated sequences
+    #this splits xs into a set of those sequences
+    def split(xs, paddedLength):
+        return xs.view(-1, paddedLength, *x.shape[1:])
+
+
+    def forward(self, infoset, lengths=None, trace=False):
+        device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+
+        isSingle = False
+        if len(infoset.shape) == 2:
+            isSingle = True
+            infoset = infoset[None, :, :]
+
+        #embed the word hash, which is the first element
+        if trace:
+            print('infoset', infoset, file=sys.stderr)
+        embedded = self.embeddings(infoset[:,:,0])
+
+        #embedding seems to spit out some pretty low-magnitude vectors
+        #so let's try normalizing
+        embedded = F.normalize(embedded, p=2, dim=2)
+
+        if trace:
+            print('embedded', embedded, file=sys.stderr)
+
+        #embedded = self.dropE(embedded)
+        #replace the hash with the embedded vector
+        embedded = torch.cat((embedded, infoset[:,:, 1:].float()), 2)
+        #del infoset
+
+        x = F.pad(embedded, (0,0, 0,self.inputSize - embedded.shape[1]))
+        x = torch.cat(tuple(x.transpose(0,1)), 1)
+        x = self.dropE(x)
+
+        if trace:
+            print('before first linear', x, file=sys.stderr)
+
+        x = F.relu(self.fc1(x))
+        x = self.drop1(x)
+
+        if trace:
+            print('before split', x, file=sys.stderr)
+
+        xVal = x
+
+        #2 and 3 have skip connections, as they have the same sized input and output
+        x = F.relu(self.fc2(x))# + x)
+        #x = F.relu(self.fc2(x))
+        x = self.drop2(x)
+
+        x = F.relu(self.fc3(x))# + x)
+        #x = F.relu(self.fc3(x))
+        x = self.drop3(x)
+
+        if trace:
+            print('pre norm', x, file=sys.stderr)
+
+        #deep cfr does normalization here
+        #x = batchNorm(x)
+
+        if trace:
+            print('post norm', x, file=sys.stderr)
+
+        x = self.fc6(x)
+
+        if self.softmax:
+            x = F.softmax(x, dim=1)
+        else:
+            pass
+            #x = torch.sigmoid(x)
+            #x = F.relu(x)
+
+        #value output
+        xVal = F.relu(self.fcVal1(xVal))# + xVal)
+        xVal = F.relu(self.fcVal2(xVal))# + xVal)
+        #xVal = torch.tanh(self.fcValOut(xVal))
+        #xVal = batchNorm(xVal)
+        xVal = self.fcValOut(xVal)
+
+        if isSingle:
+            return torch.cat([x[0], xVal[0]])
+        else:
+            x = torch.cat([x, xVal], dim=1)
+            #x = batchNorm(x)
+            return x
+
+
 #model of the network
 class LstmNet(nn.Module):
     #softmax is whether we softmax the final output
@@ -99,7 +345,7 @@ class LstmNet(nn.Module):
             lstmInputSize = config.embedSize + config.numTokenBits
 
         #'LSTM' to process infoset via the embeddings
-        self.lstm = nn.LSTM(lstmInputSize, config.lstmSize, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, bidirectional=False, batch_first=True)
+        self.lstm = nn.GRU(lstmInputSize, config.lstmSize, num_layers=config.numLstmLayers, dropout=config.lstmDropoutPercent, bidirectional=False, batch_first=True)
 
         #attention
         if config.enableAttention:
@@ -471,7 +717,7 @@ class DeepCfrModel:
             #actually, the deep cfr paper said don't do this
             #newNet.load_state_dict(self.net.state_dict())
             #I'm still going to copy over the embedding
-            #newNet.embeddings.load_state_dict(self.net.embeddings.state_dict())
+            newNet.embeddings.load_state_dict(self.net.embeddings.state_dict())
             self.net = newNet
 
 
@@ -511,12 +757,10 @@ class DeepCfrModel:
         numWorkers = config.numWorkers
 
         trainingLoader = dataStorage.BatchDataLoader(id=self.name, indices=trainIndices, batch_size=miniBatchSize, num_threads_in_mt=config.numWorkers)
-        baseTrainingLoader = trainingLoader
         if numWorkers > 1:
             trainingLoader = MultiThreadedAugmenter(trainingLoader, None, numWorkers, 2, None)
 
         testingLoader = dataStorage.BatchDataLoader(id=self.name, indices=testIndices, batch_size=miniBatchSize, num_threads_in_mt=numWorkers)
-        baseTestingLoader = testingLoader
         if numWorkers > 1:
             testingLoader = MultiThreadedAugmenter(testingLoader, None, numWorkers)
 
@@ -525,34 +769,76 @@ class DeepCfrModel:
             if epochs > 1:
                 print('\repoch', j, end=' ', file=sys.stderr)
 
+            """
+            if j % 100 == 0:
+                self.net.train(False)
+                exampleInfoSets = [
+                    ['start', 'hand', '2', '0', 'deal', '1', 'raise'],
+                    ['start', 'hand', '9', '0', 'deal', '1', 'raise'],
+                    ['start', 'hand', '14', '0', 'deal', '1', 'raise'],
+                ]
+                self.net.train(True)
+
+                for example in exampleInfoSets:
+                    print('example input:', example, file=sys.stderr)
+                    probs, expVal = self.predict(example, trace=False)
+                    print('exampleOutput (deal, fold, call, raise)', np.round(100 * probs), 'exp value', round(expVal * 100), file=sys.stderr)
+            """
+
+            
+            #loader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, shuffle=False, num_workers=config.numWorkers, pin_memory=False, collate_fn=myCollate, sampler=trainSampler)
+
             if j == 0:
                 print('training size:', len(trainIndices), 'val size:', len(testIndices), file=sys.stderr)
 
             totalLoss = 0
             lossFunc = nn.MSELoss()
 
-            baseTrainingLoader.shuffle()
-
             i = 1
             sampleCount = 0
             chunkSize = dataset.size  / (miniBatchSize * 10)
+            #for data, dataLengths, labels, iters in loader:
             for data, dataLengths, labels, iters in trainingLoader:
                 sampleCount += dataLengths.shape[0]
                 i += 1
 
                 labels = labels.float().to(device)
+                #labels = batchNorm(labels)
                 iters = iters.float().to(device)
                 data = data.long().to(device)
                 dataLengths = dataLengths.long().to(device)
+                #print('------')
+                #print('data', data.squeeze(), file=sys.stderr)
+                #print('label', labels, file=sys.stderr)
+                #print('label exp values', labels[:, -1], file=sys.stderr)
+                #print('label exp values avg', labels[:, -1].mean(), file=sys.stderr)
+                #print('label exp values std', labels[:, -1].std(), file=sys.stderr)
 
                 #evaluate on network
                 self.optimizer.zero_grad()
-                ys = self.net(data, lengths=dataLengths, trace=False).squeeze()
+                ys = self.net(data, lengths=dataLengths, trace=False)
+                #print('ys', ys, file=sys.stderr)
+                #print('ys exp values', ys[:, -1], file=sys.stderr)
+                #print('ys exp values avg', ys[:, -1].mean(), file=sys.stderr)
+                #print('ys exp values std', ys[:, -1].std(), file=sys.stderr)
 
                 #loss function from the paper
-                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2)) / (torch.sum(iters).item())
+                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2)) / (torch.sum(iters).item() / iters.shape[0])
+                #loss = torch.sum((labels - ys) ** 2) / labels.shape[0]
+                #loss = lossFunc(ys, labels)
+                #print('loss', loss)
+                """
+                if i % 1 == 0:
+                    print('----------', file=sys.stderr)
+                    #print('iters', iters, file=sys.stderr)
+                    print('infosets', data, file=sys.stderr)
+                    print('ys', torch.round(ys * 100) / 100, file=sys.stderr)
+                    print('labels', torch.round(labels * 100) / 100, file=sys.stderr)
+                """
+
                 #get gradient of loss
                 #use amp because nvidia said it's better
+                #TODO fix amp
                 with amp.scale_loss(loss, self.optimizer) as scaled_loss:
                     scaled_loss.backward()
                 #loss.backward()
@@ -563,7 +849,8 @@ class DeepCfrModel:
 
                 #train the network
                 self.optimizer.step()
-                totalLoss += loss.item()
+                totalLoss += loss.item() / (torch.sum(iters).item() / iters.shape[0])
+                #totalLoss += loss.item()
 
 
             avgLoss = totalLoss / sampleCount
@@ -573,11 +860,8 @@ class DeepCfrModel:
             #get validation loss
             #testLoader = torch.utils.data.DataLoader(dataset, batch_size=miniBatchSize, num_workers=config.numWorkers, collate_fn=myCollate, sampler=testSampler)
             self.net.train(False)
-            baseTestingLoader.shuffle()
             totalValLoss = 0
             valCount = 0
-            stdTotal = 0
-            stdCount = 0
             #for data, dataLengths, labels, iters in testLoader:
             for data, dataLengths, labels, iters in testingLoader:
                 labels = labels.float().to(device)
@@ -585,23 +869,13 @@ class DeepCfrModel:
                 iters = iters.float().to(device)
                 data = data.long().to(device)
                 dataLengths = dataLengths.long().to(device)
-                ys = self.net(data, lengths=dataLengths, trace=False).squeeze()
-                if valCount == 0:
-                    #print('data', data[0:min(10, len(data))])
-                    print('labels', labels[0:min(10, len(labels))])
-                    print('output', ys[0:min(10, len(labels))])
-                    print('stddev', ys.std())
-                stdTotal += ys.std().item()
-                stdCount += 1
-
-                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2)) / (torch.sum(iters).item())
-                totalValLoss += loss.item()
+                ys = self.net(data, lengths=dataLengths, trace=False)
+                #print('ys', np.round(100 * ys.cpu().detach().numpy()) / 100, file=sys.stderr)
+                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2))# / labels.shape[0]
+                totalValLoss += loss.item() / (torch.sum(iters).item() / iters.shape[0])
                 valCount += dataLengths.shape[0]
 
             self.net.train(True)
-
-            with open('stddev.csv', 'a') as file:
-                print(stdTotal / stdCount, end=',', file=file)
 
             avgValLoss = totalValLoss / valCount
 
@@ -618,13 +892,10 @@ class DeepCfrModel:
                 lowestLoss = schedLoss
                 lowestLossIndex = j
 
-            """
             if schedLoss < 0.35:
                 print('eh,', schedLoss, 'is good enough', file=sys.stderr)
                 break
-            """
 
-            """
             if j - lowestLossIndex > 3 * config.schedulerPatience:#avoid saddle points
                 #print('resetting learn rate to default', j, lowestLossIndex, lowestLoss, schedLoss, lastResetLoss, file=sys.stderr)
                 #self.optimizer = optim.Adam(self.net.parameters(), lr=config.learnRate)
@@ -639,7 +910,6 @@ class DeepCfrModel:
                     print('stopping epoch early, (schedLoss - lastResetLoss) / lastResetLoss) is', (schedLoss - lastResetLoss) / lastResetLoss, file=sys.stderr)
                     break
                 lastResetLoss = schedLoss
-            """
 
 
 
@@ -652,8 +922,6 @@ class DeepCfrModel:
         with open('valloss.csv', 'a') as file:
             print(file=file)
         with open('trainloss.csv', 'a') as file:
-            print(file=file)
-        with open('stddev.csv', 'a') as file:
             print(file=file)
         print('\n', file=sys.stderr)
 

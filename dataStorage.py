@@ -33,6 +33,7 @@ def clearData():
     os.system('rm -r ' + DATA_DIR + '*')
     os.system('rm valloss.csv')
     os.system('rm trainloss.csv')
+    os.system('rm stddev.csv')
 
 #deletes data belonging to a certain name
 def clearSamplesByName(name):
@@ -167,6 +168,9 @@ class BatchDataLoader(SlimDataLoaderBase):
     def reset(self):
         self.current_position = self.thread_id
         self.was_initialized = True
+
+    def shuffle(self):
+        np.random.shuffle(self.indices)
 
     def generate_train_batch(self):
         if not self.was_initialized:

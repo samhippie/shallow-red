@@ -11,9 +11,6 @@ import sys
 
 import config
 
-#TODO i'm making internal commands start with !
-#so things like noop and picking parts of a team should start using it
-
 #location of the modified ps executable
 PS_PATH = '/home/sam/builds/Pokemon-Showdown/pokemon-showdown'
 PS_ARG = 'simulate-battle'
@@ -40,8 +37,6 @@ numActions = 10
 
 #mons are joined with ']' in between
 #send setteam mon1]mon2]mon3
-#TODO I think the format changed with the latest version of showdown, fix when we update showdown
-#TODO also update showdown
 legalMons = [
     #'Bisharp||darkiniumz||suckerpunch,taunt,ironhead,falseswipe|Adamant|4,252,,,,252|||||',
     #'Alakazam||alakazite||disable,hiddenpowerfighting,psychic,knockoff|Modest|4,,,252,,252||,30,,,,|||',
@@ -338,7 +333,7 @@ class Game:
         if self.curPlayer == player:
             infoContext = ['OPTIONS']
             for i, action in enumerate(self.curActions):
-                infoContext += ['@', str(i)] + tokenize(action, player, gameLine=False)
+                infoContext += ['@', str(i)] + action
             return self.infosets[player] + infoContext
         else:
             return self.infosets[player]
@@ -349,9 +344,9 @@ class Game:
         self.waitingOnAction = False
 
         if self.saveTrajectories:
-            self.prevTrajectories[player].append((copy.copy(self.getInfoset(player)), actionIndex, len(self.curActions)))
+            self.prevTrajectories[player].append((copy.copy(self.getInfoset(player)), actionIndex, copy.copy(self.curActions)))
 
-        self.infosets[player] += ['CHOICE'] +  tokenize(action, player, gameLine=False)
+        self.infosets[player] += ['CHOICE'] +  action
 
         if self.inTeamPicker and self.format not in teamPickingFormats:
             self.inTeamPicker = False
@@ -392,7 +387,7 @@ class Game:
         
 
     async def sendCmd(self, cmd, player=None):
-        if cmd == 'noop':
+        if cmd == '!noop':
             #showdown doesn't expect any input
             return
         if cmd.startswith('setteam '):
@@ -478,7 +473,7 @@ doublesFormats = ['doubles', '2v2doubles', '2v2', 'vgc']
 #this works for anything that doesn't require switching
 def getMovesImpl(format, req):
     if 'wait' in req:
-        return [' noop'], ['noop']
+        return ['!noop']
     elif 'teambuilding' in req:
         if format in teamPickingFormats:
             curMons = req['teambuilding']#this organization sucks
@@ -594,8 +589,12 @@ def getMovesImpl(format, req):
                 actions.append(','.join(set))
         return actions
 
-
 def prettyPrintMove(jointAction, req):
+    #player = 0 if req['side']['id'] == 'p1' else 1
+    player = 0#actions shouldn't be player-specific
+    return tokenize(prettyPrintMoveImpl(jointAction, req), player, gameLine=False)
+
+def prettyPrintMoveImpl(jointAction, req):
     if 'teambuilding' in req:
         return jointAction
     action = jointAction.split(',')
@@ -603,12 +602,13 @@ def prettyPrintMove(jointAction, req):
     for k in range(len(action)):
         a = action[k]
         a = a.strip()
-        if 'pass' in a:
+        if a.startswith('pass'):
+        #if 'pass' in a:
             actionText.append('pass')
-        elif '!makemega' in a:
+        elif a.startswith('!makemega'):
             mon = a.split(' ')[1]
             actionText.append('mega evolve,' + mon)
-        elif 'move' in a:
+        elif a.startswith('move'):
             parts = a.split(' ')
             zMove = parts[-1] == 'zmove'
             if zMove:
@@ -623,13 +623,21 @@ def prettyPrintMove(jointAction, req):
                 actionText.append(('Z|' if zMove else '') + move + ', into slot, ' + str(targetNum))
             else:
                 actionText.append(('Z|' if zMove else '') + move)
-        elif 'team' in a:
-            actionText.append(a)
-        elif 'switch' in a:
+        elif a.startswith('team'):
+            team = a.split(' ')[1]
+            monSummaries = []
+            for j, monNum in enumerate(team):
+                i = int(monNum)-1
+                mon = req['side']['pokemon'][i]
+                summary = mon['details'] + ',moves,' + (','.join(mon['moves']))
+                monSummaries.append('team ' + str(j) + ',' + summary)
+            teamAction = ','.join(monSummaries)
+            actionText.append(teamAction)
+        elif a.startswith('switch'):
             targetNum = int(a.strip().split(' ')[1])
             mon = req['side']['pokemon'][targetNum-1]
             actionText.append('switch to ' + mon['details'])
-        elif 'noop' in a:
+        elif a.startswith('!noop'):
             actionText.append('wait')
         else:
             actionText.append('unknown action: ' + a)
@@ -640,9 +648,13 @@ def prettyPrintMove(jointAction, req):
 
 if __name__ == '__main__':
     #test code for adding megas and z moves
-    req = json.loads("""{"active":[{"moves":[{"move":"Sucker Punch","id":"suckerpunch","pp":0,"maxpp":8,"target":"normal","disabled":true},{"move":"Taunt","id":"taunt","pp":32,"maxpp":32,"target":"normal","disabled":true},{"move":"Iron Head","id":"ironhead","pp":23,"maxpp":24,"target":"normal","disabled":false},{"move":"False Swipe","id":"falseswipe","pp":62,"maxpp":64,"target":"normal","disabled":false}],"canZMove":[null,{"move":"Z-Taunt","target":"normal"},null,null]}],"side":{"name":"bot1","id":"p1","pokemon":[{"ident":"p1: Bisharp","details":"Bisharp, M","condition":"135/272","active":true,"stats":{"atk":383,"def":236,"spa":140,"spd":176,"spe":239},"moves":["suckerpunch","taunt","ironhead","falseswipe"],"baseAbility":"defiant","item":"darkiniumz","pokeball":"pokeball","ability":"defiant"}]},"stateHash":-957399959,"state":{"weather":{"pokemon":0,"teampreview":0},"players":[{"zMoveUsed":false,"active":{"p1: Bisharp":{"active":true,"newlySwitched":false,"ability":"defiant","addedType":"","moves":[0,1,0,0],"boosts":[0,0,0,0,0,0,0],"volatiles":{"taunt":1}}},"sideConditions":{},"mons":{"p1: Bisharp":{"details":"Bisharp, M","status":"","hp":5,"item":"darkiniumz"}}},{"zMoveUsed":false,"active":{"p2: Bisharp":{"active":true,"newlySwitched":false,"ability":"defiant","addedType":"","moves":[0,0,0,0],"boosts":[0,0,0,0,0,0,0],"volatiles":{}}},"sideConditions":{},"mons":{"p2: Bisharp":{"details":"Bisharp, M","status":"","hp":5,"item":"darkiniumz"}}}],"startingSeed":[51968.887253846486,40822.144387754604,7650.083569921713,44314.95115095951],"actions":[["team 1","move 1","move 1","move 4","move 4","move 1","move 1","move 1","move 1","move 1","move 1","move 3"],["team 1","move 2","move 2","move 2","move 2","move 2","move 2","move 2","move 2","move 2","move 1","move 1"]]}}""")
+    req = json.loads("""
+            {"teamPreview":true,"maxTeamSize":1,"side":{"name":"bot2","id":"p2","pokemon":[{"ident":"p2: Voltorb","details":"Voltorb, L85","condition":"178/178","active":true,"stats":{"atk":77,"def":141,"spa":151,"spd":106,"spe":196},"moves":["doubleteam","lightscreen","headbutt","torment"],"baseAbility":"soundproof","item":"loveball","pokeball":"pokeball","ability":"soundproof"},{"ident":"p2: Magneton","details":"Magneton, L76","condition":"211/211","active":false,"stats":{"atk":114,"def":166,"spa":209,"spd":131,"spe":158},"moves":["toxic","shockwave","discharge","metalsound"],"baseAbility":"analytic","item":"flyiniumz","pokeball":"pokeball","ability":"analytic"},{"ident":"p2: Vaporeon","details":"Vaporeon, L72, M","condition":"286/286","active":false,"stats":{"atk":120,"def":134,"spa":193,"spd":174,"spe":105},"moves":["sleeptalk","laserfocus","aquatail","confide"],"baseAbility":"hydration","item":"glalitite","pokeball":"pokeball","ability":"hydration"},{"ident":"p2: Doduo","details":"Doduo, L88, F","condition":"169/169","active":false,"stats":{"atk":174,"def":137,"spa":94,"spd":107,"spe":185},"moves":["endure","aircutter","mimic","toxic"],"baseAbility":"runaway","item":"berryjuice","pokeball":"pokeball","ability":"runaway"},{"ident":"p2: Weepinbell","details":"Weepinbell, L82, M","condition":"201/201","active":false,"stats":{"atk":216,"def":112,"spa":178,"spd":110,"spe":112},"moves":["endure","morningsun","rest","synthesis"],"baseAbility":"gluttony","item":"rowapberry","pokeball":"pokeball","ability":"gluttony"},{"ident":"p2: Bellsprout","details":"Bellsprout, L89, M","condition":"193/193","active":false,"stats":{"atk":195,"def":69,"spa":220,"spd":83,"spe":83},"moves":["bulletseed","cut","round","growth"],"baseAbility":"chlorophyll","item":"fistplate","pokeball":"pokeball","ability":"chlorophyll"}]}}
+            """)
 
 
+    print(json.dumps(req, indent=2))
     moves = getMovesImpl('1v1', req)
     print(moves)
     print([prettyPrintMove(m, req) for m in moves])
+    print(prettyPrintMove('team 12', req))

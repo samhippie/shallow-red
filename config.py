@@ -36,8 +36,8 @@ probCutoff = 0.03
 numTestGames = 10
 
 #general game config
-#gameName = 'warPoker'
-gameName = 'pokemon'
+gameName = 'warPoker'
+#gameName = 'pokemon'
 
 if gameName == 'warPoker':
     game = games.warPoker
@@ -52,14 +52,14 @@ if gameName == 'warPoker':
     #seed for all search games, None for default
     seed = None
     #which search iteration to start from, None for fresh start (delete data)
-    resumeIter = None
+    resumeIter = 25
     #number of game tree traversals per search iteration
-    innerLoops = 200
+    innerLoops = 500
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still possibly probed via rollout)
-    branchingLimit = 1
+    branchingLimit = None
     #whether to probe branches not taken
-    enableProbingRollout=False
+    enableProbingRollout=True
     #maximum depth in a traversal before rollout
     depthLimit = None
     #odds of the off player making a random move
@@ -73,15 +73,15 @@ if gameName == 'warPoker':
 
     #training
     #number of epochs for training the advantage network
-    advEpochs = 100
+    advEpochs = 500
     #number of epochs for training the strategy network
     stratEpochs = 5
     #maximum number of samples in an epoch
-    epochMaxNumSamples = 10000
+    epochMaxNumSamples = 50000
     #number of samples in a batch
     miniBatchSize = 4096
     #number of workers for the data loader
-    numWorkers = 8
+    numWorkers = 1
     #whether to create a fresh advantage network for each iteration
     newIterNets = True
     singleDeep = True
@@ -90,32 +90,35 @@ if gameName == 'warPoker':
     #number of bits for numbers in infosets
     numTokenBits = 0
     #maximum size for infoset vocabulary
-    vocabSize = 128
+    vocabSize = 256
     #size of embedding vector
-    embedSize = 4
+    embedSize = 64
     #dropout rate after embedding during training
-    embedDropoutPercent = 0.2
+    embedDropoutPercent = 0.5
 
     #cnn stuff
-    enableCnn = True
+    enableCnn = False
 
     #size of hidden state of the lstm (split in half if we're using a bidirection lstm)
-    lstmSize = 32
+    lstmSize = 64
     #number of lstm layers
-    numLstmLayers = 1
+    numLstmLayers = 2
     #dropout percentage for the lstm
-    lstmDropoutPercent = 0
+    lstmDropoutPercent = 0.5
     #size of each fully connected layer
-    width = 8
+    width = 16
 
-    #enable an attention later after the lstm
-    enableAttention = True
+    #enable an attention layer after the lstm
+    enableAttention = False
 
     #learn rate for training
-    learnRate = 0.001 #whether to use a scheduler for the learning rate
-    useScheduler = True
+    learnRate = 0.0001 
+    #which optimizer to use (adam or sgd)
+    optimizer = 'adam'
+    #whether to use a scheduler for the learning rate
+    useScheduler = False
     #the patience of the schedule (# of epochs before reducing learn rate)
-    schedulerPatience = 10
+    schedulerPatience = 20
     #what factor to use to reduce the learn rate
     schedulerFactor = 0.5
     #what fraction of samples to use for validation
@@ -143,7 +146,7 @@ elif gameName == 'pokemon':
     #which search iteration to start from, None for fresh start (delete data)
     resumeIter = None
     #number of game tree traversals per search iteration
-    innerLoops = 50
+    innerLoops = 500
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still possibly probed via rollout)
     branchingLimit = 1
@@ -162,13 +165,13 @@ elif gameName == 'pokemon':
 
     #training
     #number of epochs for training the advantage network
-    advEpochs = 300
+    advEpochs = 1000
     #number of epochs for training the strategy network
     stratEpochs = 5
     #maximum number of samples in an epoch
-    epochMaxNumSamples = 100000
+    epochMaxNumSamples = 1000000
     #number of samples in a batch
-    miniBatchSize = 512
+    miniBatchSize = 256
     #number of workers for the data loader
     numWorkers = 8
     #whether to create a fresh advantage network for each iteration
@@ -181,29 +184,31 @@ elif gameName == 'pokemon':
     #maximum size for infoset vocabulary
     vocabSize = 4096
     #size of embedding vector
-    embedSize = 10
+    embedSize = 256
     #dropout rate after embedding during training
-    embedDropoutPercent = 0.2
+    embedDropoutPercent = 0.3
 
     #cnn stuff
-    enableCnn = False
+    enableCnn = True
 
     #size of hidden state of the lstm
-    lstmSize = 16
+    lstmSize = 64
     #number of lstm layers
     numLstmLayers = 4
     #dropout percentage for the lstm
-    lstmDropoutPercent = 0.2
+    lstmDropoutPercent = 0.3
     #size of each fully connected layer
-    width = 16
+    width = 64
 
     #enable an attention later after the lstm
     enableAttention = True
 
     #learn rate for training
-    learnRate = 0.001
+    learnRate = 0.0001
+    #which optimizer to use (adam or sgd)
+    optimizer = 'adam'
     #whether to use a scheduler for the learning rate
-    useScheduler = True
+    useScheduler = False
     #the patience of the schedule (# of epochs before reducing learn rate)
     schedulerPatience = 10
     #what factor to use to reduce the learn rate

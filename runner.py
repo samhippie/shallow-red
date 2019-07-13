@@ -167,7 +167,8 @@ async def testGames(agent, num, file=sys.stdout):
                         normProbs = [1 / len(actions) for a in actions]
 
                     for j in range(len(actions)):
-                        actionString = config.game.prettyPrintMove(actions[j], req)
+                        #actionString = config.game.prettyPrintMove(actions[j], req)
+                        actionString = actions[j]
                         if normProbs[j] > 0:
                             print('|c|p' + str(player+1) + '|Turn ' + str(i) + ' action:', actionString,
                                     'prob:', '%.1f%%' % (normProbs[j] * 100), file=file)

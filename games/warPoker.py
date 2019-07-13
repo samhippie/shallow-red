@@ -19,7 +19,7 @@ def getContext():
     return _Context()
 
 def prettyPrintMove(move, req=None):
-    return move
+    return [move]
 
 #our state machine for the game
 class _Game():
@@ -133,7 +133,7 @@ class Game:
 
     async def getTurn(self):
         if self.state == _Game.START:
-            self.curActions = [_Game.DEAL]
+            self.curActions = [[_Game.DEAL]]
             self.curPlayer = self.dealer
             return (self.dealer, {}, self.curActions)
 
@@ -157,7 +157,7 @@ class Game:
         else:
             player = self.dealer
 
-        actions = _Game.actionDict[self.state]
+        actions = [[a] for a in _Game.actionDict[self.state]]
 
         self.curActions = actions
         self.curPlayer = player
@@ -170,18 +170,18 @@ class Game:
             infoContext = ['OPTIONS']
             for i, action in enumerate(self.curActions):
                 infoContext.append('@' + str(i))
-                infoContext.append(action)
+                infoContext += action
             return self.infosets[player] + infoContext
         else:
             return self.infosets[player]
 
     async def takeAction(self, player, actionIndex):
-        action = self.curActions[actionIndex]
+        action = self.curActions[actionIndex][0]
         if self.verbose:
             print('player', player+1, 'takes action', action, file=self.file)
             print('bet:', self.bet, 'pot', self.pot, file=self.file)
         if self.saveTrajectories:
-            self.prevTrajectories[player].append((copy.copy(self.getInfoset(player)), actionIndex, len(self.curActions)))
+            self.prevTrajectories[player].append((copy.copy(self.getInfoset(player)), actionIndex, copy.copy(self.curActions)))
 
         self.curActions = []
         #all actions are public
