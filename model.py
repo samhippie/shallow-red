@@ -21,6 +21,7 @@ import time
 
 import dataStorage
 import config
+import gradPlot
 
 AMP_OPT_LEVEL = "O2"
 
@@ -31,6 +32,10 @@ elif config.optimizer == 'sgd':
 
 #how many bits are used to represent numbers in tokens
 NUM_TOKEN_BITS = config.numTokenBits
+
+#output this from a model if you don't want that output to contribute to loss
+#e.g. when it's for an invalid move index
+IGNORE_LABEL = float('-inf')
 
 #not actually binary, but some weird logarithmic unary-ish thing
 def numToBinary(n):
@@ -356,19 +361,13 @@ class DeepCfrModel:
         self.net.share_memory()
 
     def addSample(self, infoset, label, iter, expValue):
-        #infosetTensor = np.array([hash(token) for token in infoset], dtype=np.long)
         infosetTensor = infosetToTensor(infoset)
 
         #this could be cleaned up now that we're using action indices
-        #fill the tensor with -1, which means that actions without labels are considered bad instead of neutral
-        #this doesn't make sense for softmaxed values, but we haven't softmaxed in months
-        labelTensor = -1 * np.ones(self.outputSize + 1)
+        labelTensor = np.full(self.outputSize + 1, IGNORE_LABEL)
         for n, value in enumerate(label):
-            #print(action, value)
-            #n = config.game.enumAction(action)
             labelTensor[n] = value
         labelTensor[-1] = expValue
-        #print('saving label', labelTensor)
 
         iterTensor = np.array([iter])
 
@@ -457,6 +456,15 @@ class DeepCfrModel:
         data = self.net(data, trace=trace).float().cpu().detach().numpy()
         return data[0:-1], data[-1]
 
+    def _loss(labels, ys, iters):
+        mask = labels == IGNORE_LABEL
+        labels.masked_scatter_(mask, ys)
+        loss = iters.view(labels.shape[0],-1) * ((labels - ys) ** 2)
+        #mask = loss == IGNORE_LABEL
+        #loss[mask] *= 0
+        loss = torch.sum(loss) / (torch.sum(iters).item())
+        return loss
+
     def train(self, iteration, epochs=1):
         #move from write cache to db
         self.clearSampleCache()
@@ -530,7 +538,6 @@ class DeepCfrModel:
                 print('training size:', len(trainIndices), 'val size:', len(testIndices), file=sys.stderr)
 
             totalLoss = 0
-            lossFunc = nn.MSELoss()
 
             if (j + 1) % shuffleStride == 0:
                 baseTrainingLoader.shuffle()
@@ -551,14 +558,20 @@ class DeepCfrModel:
                 self.optimizer.zero_grad()
                 ys = self.net(data, lengths=dataLengths, trace=False).squeeze()
 
-                #loss function from the paper
-                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2)) / (torch.sum(iters).item())
+                #loss function from the paper, except we mask out ignored values
+                #loss = iters.view(labels.shape[0],-1) * ((labels - ys) ** 2)
+                #mask = loss == IGNORE_LABEL
+                #loss[mask] = 0
+                #loss = torch.sum(loss) / (torch.sum(iters).item())
+                loss = DeepCfrModel._loss(labels, ys, iters)
                 #get gradient of loss
                 #use amp because nvidia said it's better
                 with amp.scale_loss(loss, self.optimizer) as scaled_loss:
                     scaled_loss.backward()
                 #loss.backward()
 
+                #if (j + 1) % 100 == 0:
+                    #gradPlot.plot_grad_flow(self.net.named_parameters())
 
                 #clip gradient norm, which was done in the paper
                 nn.utils.clip_grad_norm_(self.net.parameters(), 5)
@@ -592,11 +605,12 @@ class DeepCfrModel:
                     #print('data', data[0:min(10, len(data))])
                     print('labels', labels[0:min(10, len(labels))])
                     print('output', ys[0:min(10, len(labels))])
-                    print('stddev', ys.std())
+                    print('stddev', ys[:, 0].std())#first column is good enough
                 stdTotal += ys.std().item()
                 stdCount += 1
 
-                loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2)) / (torch.sum(iters).item())
+                #loss = torch.sum(iters.view(labels.shape[0],-1) * ((labels - ys) ** 2)) / (torch.sum(iters).item())
+                loss = DeepCfrModel._loss(labels, ys, iters)
                 totalValLoss += loss.item()
                 valCount += 1#dataLengths.shape[0]
 
