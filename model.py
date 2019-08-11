@@ -529,7 +529,7 @@ class DeepCfrModel:
             testingLoader = MultiThreadedAugmenter(testingLoader, None, numWorkers)
 
         print(file=sys.stderr)
-        shuffleStride = 10#TODO move to config
+        shuffleStride = 1#TODO move to config
         for j in range(epochs):
             if epochs > 1:
                 print('\repoch', j, end=' ', file=sys.stderr)
@@ -542,7 +542,7 @@ class DeepCfrModel:
             if (j + 1) % shuffleStride == 0:
                 baseTrainingLoader.shuffle()
 
-            i = 1
+            i = 0
             sampleCount = 0
             chunkSize = dataset.size  / (miniBatchSize * 10)
             for data, dataLengths, labels, iters in trainingLoader:
@@ -570,11 +570,12 @@ class DeepCfrModel:
                     scaled_loss.backward()
                 #loss.backward()
 
-                #if (j + 1) % 100 == 0:
-                    #gradPlot.plot_grad_flow(self.net.named_parameters())
-
                 #clip gradient norm, which was done in the paper
                 nn.utils.clip_grad_norm_(self.net.parameters(), 5)
+
+                if config.gradPlotStride and (j + 1) % config.gradPlotStride == 0 and i == 1:
+                    gradPlot.plot_grad_flow(self.net.named_parameters())
+
 
                 #train the network
                 self.optimizer.step()

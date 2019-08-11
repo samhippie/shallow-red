@@ -22,7 +22,9 @@ class WarPoker:
 #whether to print out each line in our training games (for debugging)
 verboseTraining = False
 #whether to print details for each validation pass
-verboseValidation = False
+verboseValidation = True
+#show the gradient plot every so many epochs (None to disable)
+gradPlotStride = 200
 
 #data storage
 dataDir = '/home/sam/data-ssd/'
@@ -38,8 +40,8 @@ probCutoff = 0.03
 numTestGames = 10
 
 #general game config
-gameName = 'warPoker'
-#gameName = 'pokemon'
+#gameName = 'warPoker'
+gameName = 'pokemon'
 
 if gameName == 'warPoker':
     game = games.warPoker
@@ -57,10 +59,10 @@ if gameName == 'warPoker':
     #which search iteration to start from, None for fresh start (delete data)
     resumeIter = None
     #number of game tree traversals per search iteration
-    innerLoops = 500
+    innerLoops = 1000
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still possibly probed via rollout)
-    branchingLimit = None
+    branchingLimit = 1
     #whether to probe branches not taken
     enableProbingRollout=True
     #maximum depth in a traversal before rollout
@@ -103,16 +105,16 @@ if gameName == 'warPoker':
     enableCnn = False
 
     #size of hidden state of the lstm (split in half if we're using a bidirection lstm)
-    lstmSize = 12
+    lstmSize = 16
     #number of lstm layers
-    numLstmLayers = 2
+    numLstmLayers = 1
     #dropout percentage for the lstm
-    lstmDropoutPercent = 0.5
+    lstmDropoutPercent = 0
     #size of each fully connected layer
     width = 16
 
     #enable an attention layer after the lstm
-    enableAttention = True
+    enableAttention = False
 
     #learn rate for training
     learnRate = 0.001 
@@ -150,7 +152,7 @@ elif gameName == 'pokemon':
     #which search iteration to start from, None for fresh start (delete data)
     resumeIter = None
     #number of game tree traversals per search iteration
-    innerLoops = 500
+    innerLoops = 50
     #limit on number of branches to take per action in a traversal
     #(branches not taken are still possibly probed via rollout)
     branchingLimit = 1
@@ -169,13 +171,13 @@ elif gameName == 'pokemon':
 
     #training
     #number of epochs for training the advantage network
-    advEpochs = 1000
+    advEpochs = 200
     #number of epochs for training the strategy network
     stratEpochs = 5
     #maximum number of samples in an epoch
     epochMaxNumSamples = 1000000
     #number of samples in a batch
-    miniBatchSize = 256
+    miniBatchSize = 512
     #number of workers for the data loader
     numWorkers = 8
     #whether to create a fresh advantage network for each iteration
@@ -184,31 +186,31 @@ elif gameName == 'pokemon':
 
     #model
     #number of bits for numbers in infosets
-    numTokenBits = 5
+    numTokenBits = 3
     #maximum size for infoset vocabulary
     vocabSize = 4096
     #size of embedding vector
-    embedSize = 256
+    embedSize = 128
     #dropout rate after embedding during training
-    embedDropoutPercent = 0.3
+    embedDropoutPercent = 0.5
 
     #cnn stuff
-    enableCnn = True
+    enableCnn = False
 
     #size of hidden state of the lstm
-    lstmSize = 64
+    lstmSize = 128
     #number of lstm layers
-    numLstmLayers = 4
+    numLstmLayers = 1
     #dropout percentage for the lstm
-    lstmDropoutPercent = 0.3
+    lstmDropoutPercent = 0
     #size of each fully connected layer
-    width = 64
+    width = 32
 
     #enable an attention later after the lstm
-    enableAttention = True
+    enableAttention = False
 
     #learn rate for training
-    learnRate = 0.0001
+    learnRate = 0.001
     #which optimizer to use (adam or sgd)
     optimizer = 'adam'
     #whether to use a scheduler for the learning rate
